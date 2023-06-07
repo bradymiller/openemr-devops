@@ -5,11 +5,13 @@ metadata:
 data:
   haproxy.cfg: |
     defaults
+     log global
      mode tcp
      timeout connect 4s
      timeout server 30s
      timeout client 30s
     global
+     log stdout format raw local0 debug
      insecure-fork-wanted
      external-check
     resolvers mydns
