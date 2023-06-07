@@ -6,7 +6,7 @@ data:
   healthcheck.sh: |
     #!/bin/bash
     # Set below to true if using redis x509
-    REDISX509=false
+    REDISX509=true
     TLSPARAMETERS="--tls --cacert /certs/ca.crt"
     if $REDISX509; then
       TLSPARAMETERS="$TLSPARAMETERS --cert /certs/tls.crt --key /certs/tls.key"
