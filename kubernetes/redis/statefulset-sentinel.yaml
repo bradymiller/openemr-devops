@@ -22,7 +22,7 @@ spec:
           - |
             REDIS_PASSWORD=adminpassword
             # Set below to true if using redis x509
-            REDISX509=false
+            REDISX509=true
             nodes=redis-0.redis,redis-1.redis,redis-2.redis
             TLSPARAMETERS="--tls --cacert /certs/ca.crt"
             if $REDISX509; then
@@ -58,7 +58,7 @@ spec:
             tls-ca-cert-file /certs/ca.crt
             tls-auth-clients no
             # uncomment below (and comment line above) if using redis x509
-            # tls-auth-clients yes
+            tls-auth-clients yes
             tls-replication yes
             sentinel monitor mymaster $MASTER 6379 2
             sentinel resolve-hostnames yes

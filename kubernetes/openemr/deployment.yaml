@@ -55,8 +55,8 @@ spec:
         - name: REDIS_TLS
           value: "yes"
         # uncomment below if using redis x509
-        #- name: REDIS_X509
-        #  value: "yes"
+        - name: REDIS_X509
+          value: "yes"
         - name: SWARM_MODE
           value: "yes"
         - name: FORCE_DATABASE_SSL_CONNECT
@@ -103,10 +103,10 @@ spec:
           - key: ca.crt
             path: redis-ca
           # uncomment below if using redis x509
-          #- key: tls.crt
-          #  path: redis-cert
-          #- key: tls.key
-          #  path: redis-key
+          - key: tls.crt
+            path: redis-cert
+          - key: tls.key
+            path: redis-key
       - name: websitevolume
         persistentVolumeClaim:
           claimName: websitevolume
