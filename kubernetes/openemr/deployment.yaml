@@ -47,9 +47,9 @@ spec:
         - name: OE_USER
           value: "admin"
         - name: PHPREDIS_BUILD
-          value: "e571a81f8d3009aab38cbb88dde865edeb0607ac"
+          value: "35a7cc094c6c264aa37738b074c4c54c4ca73b87"
         - name: REDIS_SERVER
-          value: "redisproxy"
+          value: "redis-0.redis.default.svc.cluster.local"
         - name: REDIS_PASSWORD
           value: "defaultpassword"
         - name: REDIS_TLS
