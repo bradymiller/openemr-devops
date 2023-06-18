@@ -24,7 +24,7 @@ data:
     backend bk_redis
      option external-check
      external-check command /var/lib/haproxy/healthcheck.sh
-     default-server check inter 3s fall 1 rise 1 resolvers mydns
+     default-server check inter 3s fall 1 rise 1 resolvers mydns ssl verify none
      server R1 redis-0.redis.default.svc.cluster.local:6379
      server R2 redis-1.redis.default.svc.cluster.local:6379
      server R3 redis-2.redis.default.svc.cluster.local:6379
