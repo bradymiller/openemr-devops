@@ -65,6 +65,13 @@ spec:
           limits:
             cpu: 1000m
             memory: 1G
+        readinessProbe:
+          exec:
+            command:
+            - cat
+            - /root/instance-swarm-ready
+          initialDelaySeconds: 5
+          periodSeconds: 30
         volumeMounts:
         - mountPath: /root/certs/mysql/server
           name: mysql-openemr-client-certs
