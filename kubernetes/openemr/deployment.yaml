@@ -46,8 +46,6 @@ spec:
               key: admin-pass
         - name: OE_USER
           value: "admin"
-        - name: PHPREDIS_BUILD
-          value: "35a7cc094c6c264aa37738b074c4c54c4ca73b87"
         - name: REDIS_SERVER
           value: "redis-0.redis.default.svc.cluster.local"
         - name: REDIS_PASSWORD

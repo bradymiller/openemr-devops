@@ -261,34 +261,6 @@ if [ "$REDIS_SERVER" != "" ] &&
     #  and in swarm mode the docker will be functional after this redis section (ie. if do the below config section first
     #  then the breakage time of the pod will be markedly less).
 
-    # Support phpredis build
-    #   This will allow building phpredis towards either most recent development version "develop",
-    #    or a specific sha1 commit id, such as "e571a81f8d3009aab38cbb88dde865edeb0607ac".
-    #    This allows support for tls (ie. encrypted connections) since not available in production
-    #    version 5.3.7 .
-    if [ "$PHPREDIS_BUILD" != "" ]; then
-      apk update
-      apk del --no-cache php82-redis
-      apk add --no-cache git php82-dev php82-pecl-igbinary gcc make g++
-      mkdir /tmpredis
-      cd /tmpredis
-      git clone https://github.com/phpredis/phpredis.git
-      cd /tmpredis/phpredis
-      if [ "$PHPREDIS_BUILD" != "develop" ]; then
-          git reset --hard "$PHPREDIS_BUILD"
-      fi
-      # note for php 8.2, needed to change from 'phpize' to:
-      phpize82
-      # note for php 8.2, needed to change from './configure --enable-redis-igbinary' to:
-      ./configure --with-php-config=/usr/bin/php-config82 --enable-redis-igbinary
-      make -j $(nproc --all)
-      make install
-      echo "extension=redis" > /etc/php82/conf.d/20_redis.ini
-      rm -fr /tmpredis/phpredis
-      apk del --no-cache git php82-dev gcc make g++
-      cd /var/www/localhost/htdocs/openemr
-    fi
-
     # Support the following redis auth:
     #   No username and No password set (using redis default user with nopass set)
     #   Both username and password set (using the redis user and pertinent password)
