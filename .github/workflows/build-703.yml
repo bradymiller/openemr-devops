@@ -1,9 +1,7 @@
-name: Development 7.0.3 Docker Nightly Build
+name: Production 7.0.3 Docker Build
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 2 * * *' # run at 2 AM UTC
 
 jobs:
   build:
