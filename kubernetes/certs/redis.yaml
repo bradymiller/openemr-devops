@@ -21,7 +21,6 @@ spec:
       - redis
   commonName: redis
   dnsNames:
-    - redisproxy
     - redis-0.redis
     - redis-1.redis
     - redis-2.redis
