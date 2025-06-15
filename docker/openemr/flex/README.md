@@ -6,7 +6,6 @@ The docker image is maintained at https://hub.docker.com/r/openemr/openemr/
 ## How can I just spin up OpenEMR?
 
 *You **need** to run an instance of mysql/mariadb as well and connect it to this container! You can then either use auto-setup with environment variables (see below) or you can manually set up, telling the server where to find the db.* The easiest way is to use `docker-compose`. The following `docker-compose.yml` file is a good example:
-  - If you are using Raspberry Pi, then change the `mariadb:10.5` to `jsurf/rpi-mariadb`.
 ```yaml
 # Use admin/pass as user/password credentials to login to openemr (from OE_USER and OE_PASS below)
 # MYSQL_HOST and MYSQL_ROOT_PASS are required for openemr
@@ -25,7 +24,7 @@ services:
       MYSQL_ROOT_PASSWORD: root
   openemr:
     restart: always
-    image: openemr/openemr:flex-edge
+    image: openemr/openemr:flex-<alpine version>
     ports:
     - 80:80
     - 443:443
@@ -56,7 +55,7 @@ See the https://hub.docker.com/r/openemr/openemr/ page for documentation of envi
 
 ## Support on Raspberry Pi
 
-Both 32 bit and 64 bit architectures are supported on Raspberry Pi. If you are using Raspberry Pi, then need to change the `mariadb:10.5` to `jsurf/rpi-mariadb` in the above docker-compose.yml example.
+64 bit architecture is supported on Raspberry Pi.
 
 ## Where to get help?
 
