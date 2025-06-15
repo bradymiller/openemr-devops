@@ -1,0 +1,29 @@
+name: OpenEMR Flex Edge Docker Test
+
+on:
+  push:
+    branches:
+    - master
+    paths:
+    - '.github/workflows/test-flex-edge.yml'
+    - 'docker/openemr/flex/**'
+    - '.github/actions/test-actions-core/action.yml'
+    - '.github/workflows/test-core.yml'
+  pull_request:
+    branches:
+    - master
+    paths:
+    - '.github/workflows/test-flex-edge.yml'
+    - 'docker/openemr/flex/**'
+    - '.github/actions/test-actions-core/action.yml'
+    - '.github/workflows/test-core.yml'
+
+jobs:
+  build:
+    uses: ./.github/workflows/test-core.yml
+    with:
+      is_production_docker: false
+      alpine_version: "edge"
+      php_versions: '["8.2", "8.3", "8.4"]'
+      is_coverage_docker: true
+      coverage_php_version: '8.4'

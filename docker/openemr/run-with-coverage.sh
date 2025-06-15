@@ -2,7 +2,7 @@
 # Script to run the OpenEMR container with kcov coverage reporting enabled
 
 # Set required environment variables
-export DOCKER_CONTEXT_PATH=flex-edge
+export DOCKER_CONTEXT_PATH=flex
 export COMPOSE_PROFILES=kcov
 
 # Remove any previous container and volumes

@@ -1,0 +1,27 @@
+name: OpenEMR Flex 3.22 Docker Test
+
+on:
+  push:
+    branches:
+    - master
+    paths:
+    - '.github/workflows/test-flex-322.yml'
+    - 'docker/openemr/flex/**'
+    - '.github/actions/test-actions-core/action.yml'
+    - '.github/workflows/test-core.yml'
+  pull_request:
+    branches:
+    - master
+    paths:
+    - '.github/workflows/test-flex-322.yml'
+    - 'docker/openemr/flex/**'
+    - '.github/actions/test-actions-core/action.yml'
+    - '.github/workflows/test-core.yml'
+
+jobs:
+  build:
+    uses: ./.github/workflows/test-core.yml
+    with:
+      is_production_docker: false
+      alpine_version: "3.22"
+      php_versions: '["8.2", "8.3", "8.4"]'

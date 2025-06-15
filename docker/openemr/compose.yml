@@ -52,6 +52,8 @@ services:
       service: openemr
     profiles: !override
     - flex
+    environment:
+      EMPTY: "yes"
     volumes:
     - ../../openemr:/var/www/localhost/htdocs/openemr
   openemr-kcov:
@@ -63,5 +65,4 @@ services:
       context: ${DOCKER_CONTEXT_PATH}
       target: kcov
     volumes:
-    - ../../openemr:/var/www/localhost/htdocs/openemr
     - ./coverage-reports:/var/www/localhost/htdocs/coverage
