@@ -151,7 +151,7 @@ runs:
       if: ${{ env.OPENEMR_SERVICE_NAME == 'openemr-kcov-dev' || env.OPENEMR_SERVICE_NAME == 'openemr-kcov' }}
       uses: actions/upload-artifact@v4
       with:
-        name: kcov-coverage-reports
+        name: ${{ format('{0}', inputs.is_production_docker) == 'true' && 'kcov-coverage-reports-production' || (env.OPENEMR_SERVICE_NAME == 'openemr-kcov' && 'kcov-coverage-reports-flex-prod' || 'kcov-coverage-reports-flex-dev') }}
         path: docker/openemr/coverage-reports/
         retention-days: 7
 
