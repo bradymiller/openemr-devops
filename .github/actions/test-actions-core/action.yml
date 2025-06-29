@@ -15,7 +15,7 @@ runs:
   using: 'composite'
   steps:
     - name: Checkout OpenEMR
-      if: ${{ env.OPENEMR_SERVICE_NAME == 'openemr-flex' || env.OPENEMR_SERVICE_NAME == 'openemr-kcov' }}
+      if: ${{ env.OPENEMR_SERVICE_NAME == 'openemr-dev' || env.OPENEMR_SERVICE_NAME == 'openemr-kcov-dev' }}
       uses: actions/checkout@v4
       with:
         repository: openemr/openemr
@@ -27,7 +27,7 @@ runs:
       working-directory: docker/openemr
 
     - name: Create coverage directory
-      if: ${{ env.OPENEMR_SERVICE_NAME == 'openemr-kcov' }}
+      if: ${{ env.OPENEMR_SERVICE_NAME == 'openemr-kcov-dev' || env.OPENEMR_SERVICE_NAME == 'openemr-kcov' }}
       run: mkdir -p coverage-reports
       shell: bash
       working-directory: docker/openemr
@@ -148,7 +148,7 @@ runs:
       working-directory: docker/openemr
 
     - name: Upload coverage reports
-      if: ${{ env.OPENEMR_SERVICE_NAME == 'openemr-kcov' }}
+      if: ${{ env.OPENEMR_SERVICE_NAME == 'openemr-kcov-dev' || env.OPENEMR_SERVICE_NAME == 'openemr-kcov' }}
       uses: actions/upload-artifact@v4
       with:
         name: kcov-coverage-reports
