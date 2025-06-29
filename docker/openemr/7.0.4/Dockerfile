@@ -167,8 +167,8 @@ RUN cd /tmp && \
     make install
 
 # Create kcov wrapper script
-COPY kcov-wrapper.sh /var/www/localhost/htdocs/
-RUN chmod 500 /var/www/localhost/htdocs/kcov-wrapper.sh
+COPY kcov-wrapper.sh /var/www/localhost/htdocs/openemr
+RUN chmod 500 /var/www/localhost/htdocs/openemr/kcov-wrapper.sh
 
 # Create directory for coverage reports
 RUN mkdir -p /var/www/localhost/htdocs/coverage
