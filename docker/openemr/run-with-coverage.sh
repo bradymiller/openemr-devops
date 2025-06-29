@@ -9,7 +9,7 @@ export COMPOSE_PROFILES=kcov-dev
 docker compose down --remove-orphans --volumes
 
 # Build and run with coverage enabled
-docker compose build
+docker compose build --build-arg ALPINE_VERSION=edge --build-arg PHP_VERSION=8.4
 docker compose up -d
 
 echo "OpenEMR is starting with kcov coverage enabled..."
