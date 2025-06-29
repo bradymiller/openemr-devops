@@ -148,6 +148,7 @@ RUN apk add --no-cache bash \
                        curl-dev \
                        elfutils \
                        elfutils-dev \
+                       git \
                        g++ \
                        libcurl \
                        libdwarf-dev \
