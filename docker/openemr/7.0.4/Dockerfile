@@ -16,7 +16,7 @@ ENV PHP_VERSION_ABBR=${PHP_VERSION_ABBR}
 RUN apk --no-cache upgrade
 
 # Install non-php packages
-UN apk add --no-cache \
+RUN apk add --no-cache \
     apache2 apache2-ssl apache2-utils apache2-proxy git perl mariadb-client mariadb-connector-c \
     tar curl imagemagick nodejs npm certbot openssl openssl-dev dcron rsync shadow ncurses
 
