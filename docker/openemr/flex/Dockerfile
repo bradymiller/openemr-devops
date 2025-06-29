@@ -116,6 +116,7 @@ FROM base AS kcov
 
 # Install kcov dependencies
 RUN apk add --no-cache bash \
+                       build-base \
                        cmake \
                        binutils-dev \
                        curl-dev \

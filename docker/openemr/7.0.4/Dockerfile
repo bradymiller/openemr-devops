@@ -67,7 +67,7 @@ RUN ln -sf /usr/bin/php${PHP_VERSION_ABBR} /usr/bin/php
 # Install composer for openemr package building
 RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/bin --filename=composer
 
-RUN apk add --no-cache git build-base \
+RUN apk add --no-cache build-base \
     && git clone https://github.com/openemr/openemr.git --depth 1 \
     && rm -rf openemr/.git \
     && cd openemr \
@@ -90,7 +90,7 @@ RUN apk add --no-cache git build-base \
     && chown -R apache openemr/ \
     && mv openemr /var/www/localhost/htdocs/ \
     && mkdir -p /etc/ssl/certs /etc/ssl/private \
-    && apk del --no-cache git build-base \
+    && apk del --no-cache build-base \
     && sed -i 's/^ *CustomLog/#CustomLog/' /etc/apache2/httpd.conf \
     && sed -i 's/^ *ErrorLog/#ErrorLog/' /etc/apache2/httpd.conf \
     && sed -i 's/^ *CustomLog/#CustomLog/' /etc/apache2/conf.d/ssl.conf \
@@ -143,12 +143,12 @@ FROM base AS kcov
 
 # Install kcov dependencies
 RUN apk add --no-cache bash \
+                       build-base \
                        cmake \
                        binutils-dev \
                        curl-dev \
                        elfutils \
                        elfutils-dev \
-                       git \
                        g++ \
                        libcurl \
                        libdwarf-dev \
