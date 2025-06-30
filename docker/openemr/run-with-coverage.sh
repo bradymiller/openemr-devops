@@ -1,5 +1,5 @@
 #!/bin/bash
-# Script to run the OpenEMR container with kcov coverage reporting enabled
+# Script to run the OpenEMR container (default flex container) with kcov coverage reporting enabled
 
 # Set required environment variables
 export DOCKER_CONTEXT_PATH=flex
@@ -9,7 +9,7 @@ export COMPOSE_PROFILES=kcov-dev
 docker compose down --remove-orphans --volumes
 
 # Build and run with coverage enabled
-docker compose build --build-arg ALPINE_VERSION=edge --build-arg PHP_VERSION=8.4
+docker compose build
 docker compose up -d
 
 echo "OpenEMR is starting with kcov coverage enabled..."
