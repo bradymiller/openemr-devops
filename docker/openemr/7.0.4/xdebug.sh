@@ -28,12 +28,8 @@ if [ ! -f /etc/php-xdebug-configured ]; then
         else
             echo "xdebug.mode=debug"
         fi
-        if [ "${XDEBUG_CLIENT_PORT:-}" != "" ]; then
-            # manually set up host port, if set
-            echo "xdebug.client_port=${XDEBUG_CLIENT_PORT}"
-        else
-            echo "xdebug.client_port=9003"
-        fi
+        # manually set up host port, if set (or set to default 9003)
+        echo "xdebug.client_port=${XDEBUG_CLIENT_PORT:-9003}"
         if [ "${XDEBUG_CLIENT_HOST:-}" != "" ]; then
             # manually set up host, if set
             echo "xdebug.client_host=${XDEBUG_CLIENT_HOST}"
