@@ -17,44 +17,62 @@ RUN apk --no-cache upgrade
 
 # Install non-php packages
 RUN apk add --no-cache \
-    apache2 apache2-ssl apache2-utils apache2-proxy git perl mariadb-client mariadb-connector-c \
-    tar curl imagemagick nodejs npm certbot openssl openssl-dev dcron rsync shadow ncurses
+    apache2 \
+    apache2-proxy \
+    apache2-ssl \
+    apache2-utils \
+    certbot \
+    curl \
+    dcron \
+    git \
+    imagemagick \
+    mariadb-client \
+    mariadb-connector-c \
+    ncurses \
+    nodejs \
+    npm \
+    openssl \
+    openssl-dev \
+    perl \
+    rsync \
+    shadow \
+    tar
 
 # Install PHP and its extensions
 RUN apk add --no-cache \
     php${PHP_VERSION_ABBR} \
-    php${PHP_VERSION_ABBR}-tokenizer \
-    php${PHP_VERSION_ABBR}-ctype \
-    php${PHP_VERSION_ABBR}-session \
     php${PHP_VERSION_ABBR}-apache2 \
+    php${PHP_VERSION_ABBR}-calendar \
+    php${PHP_VERSION_ABBR}-ctype \
+    php${PHP_VERSION_ABBR}-curl \
+    php${PHP_VERSION_ABBR}-fileinfo \
+    php${PHP_VERSION_ABBR}-fpm \
+    php${PHP_VERSION_ABBR}-gd \
+    php${PHP_VERSION_ABBR}-iconv \
+    php${PHP_VERSION_ABBR}-intl \
     php${PHP_VERSION_ABBR}-json \
+    php${PHP_VERSION_ABBR}-ldap \
+    php${PHP_VERSION_ABBR}-mbstring \
+    php${PHP_VERSION_ABBR}-mysqli \
+    php${PHP_VERSION_ABBR}-opcache \
+    php${PHP_VERSION_ABBR}-openssl \
     php${PHP_VERSION_ABBR}-pdo \
     php${PHP_VERSION_ABBR}-pdo_mysql \
-    php${PHP_VERSION_ABBR}-curl \
-    php${PHP_VERSION_ABBR}-ldap \
-    php${PHP_VERSION_ABBR}-openssl \
-    php${PHP_VERSION_ABBR}-iconv \
-    php${PHP_VERSION_ABBR}-xml \
-    php${PHP_VERSION_ABBR}-xsl \
-    php${PHP_VERSION_ABBR}-gd \
-    php${PHP_VERSION_ABBR}-zip \
-    php${PHP_VERSION_ABBR}-soap \
-    php${PHP_VERSION_ABBR}-mbstring \
-    php${PHP_VERSION_ABBR}-zlib \
-    php${PHP_VERSION_ABBR}-mysqli \
-    php${PHP_VERSION_ABBR}-sockets \
-    php${PHP_VERSION_ABBR}-xmlreader \
-    php${PHP_VERSION_ABBR}-redis \
-    php${PHP_VERSION_ABBR}-simplexml \
-    php${PHP_VERSION_ABBR}-xmlwriter \
-    php${PHP_VERSION_ABBR}-phar \
-    php${PHP_VERSION_ABBR}-fileinfo \
-    php${PHP_VERSION_ABBR}-sodium \
-    php${PHP_VERSION_ABBR}-calendar \
-    php${PHP_VERSION_ABBR}-intl \
-    php${PHP_VERSION_ABBR}-opcache \
     php${PHP_VERSION_ABBR}-pecl-apcu \
-    php${PHP_VERSION_ABBR}-fpm
+    php${PHP_VERSION_ABBR}-phar \
+    php${PHP_VERSION_ABBR}-redis \
+    php${PHP_VERSION_ABBR}-session \
+    php${PHP_VERSION_ABBR}-simplexml \
+    php${PHP_VERSION_ABBR}-soap \
+    php${PHP_VERSION_ABBR}-sockets \
+    php${PHP_VERSION_ABBR}-sodium \
+    php${PHP_VERSION_ABBR}-tokenizer \
+    php${PHP_VERSION_ABBR}-xml \
+    php${PHP_VERSION_ABBR}-xmlreader \
+    php${PHP_VERSION_ABBR}-xmlwriter \
+    php${PHP_VERSION_ABBR}-xsl \
+    php${PHP_VERSION_ABBR}-zip \
+    php${PHP_VERSION_ABBR}-zlib
 
 # fix issue in apache
 RUN sed -i 's/^Listen 80$/Listen 0.0.0.0:80/' /etc/apache2/httpd.conf

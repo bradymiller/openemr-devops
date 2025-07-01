@@ -2,7 +2,7 @@
 
 set -e
 
-if [ "${XDEBUG_IDE_KEY}" = "" ] && [ "${XDEBUG_ON}" != 1 ]; then
+if [ "${XDEBUG_IDE_KEY:-}" = "" ] && [ "${XDEBUG_ON:-}" != 1 ]; then
    echo bad context for xdebug.sh launch
    exit 1
 fi
@@ -10,38 +10,40 @@ fi
 if [ ! -f /etc/php-xdebug-configured ]; then
     # install xdebug library
     apk update
-    apk add --no-cache php${PHP_VERSION_ABBR}-pecl-xdebug
+    apk add --no-cache "php${PHP_VERSION_ABBR?}-pecl-xdebug"
 
     # set up xdebug in php.ini
-    echo "; start xdebug configuration" >> /etc/php${PHP_VERSION_ABBR}/php.ini
-    echo "zend_extension=/usr/lib/php${PHP_VERSION_ABBR}/modules/xdebug.so" >> /etc/php${PHP_VERSION_ABBR}/php.ini
-    echo "xdebug.output_dir=/tmp" >> /etc/php${PHP_VERSION_ABBR}/php.ini
-    echo "xdebug.start_with_request=trigger" >> /etc/php${PHP_VERSION_ABBR}/php.ini
-    echo "xdebug.remote_handler=dbgp" >> /etc/php${PHP_VERSION_ABBR}/php.ini
-    echo "xdebug.log=/tmp/xdebug.log" >> /etc/php${PHP_VERSION_ABBR}/php.ini
-    echo "xdebug.discover_client_host=1" >> /etc/php${PHP_VERSION_ABBR}/php.ini
-    if [ "${XDEBUG_PROFILER_ON}" = 1 ]; then
-        # set up xdebug profiler
-        echo "xdebug.mode=debug,profile" >> /etc/php${PHP_VERSION_ABBR}/php.ini
-        echo "xdebug.profiler_output_name=cachegrind.out.%s" >> /etc/php${PHP_VERSION_ABBR}/php.ini
-    else
-        echo "xdebug.mode=debug" >> /etc/php${PHP_VERSION_ABBR}/php.ini
-    fi
-    if [ "${XDEBUG_CLIENT_PORT}" != "" ]; then
-        # manually set up host port, if set
-        echo "xdebug.client_port=${XDEBUG_CLIENT_PORT}" >> /etc/php${PHP_VERSION_ABBR}/php.ini
-    else
-        echo "xdebug.client_port=9003" >> /etc/php${PHP_VERSION_ABBR}/php.ini
-    fi
-    if [ "${XDEBUG_CLIENT_HOST}" != "" ]; then
-        # manually set up host, if set
-        echo "xdebug.client_host=${XDEBUG_CLIENT_HOST}" >> /etc/php${PHP_VERSION_ABBR}/php.ini
-    fi
-    if [ "${XDEBUG_IDE_KEY}" != "" ]; then
-        # set up ide key, if set
-        echo "xdebug.idekey=${XDEBUG_IDE_KEY}" >> /etc/php${PHP_VERSION_ABBR}/php.ini
-    fi
-    echo "; end xdebug configuration" >> /etc/php${PHP_VERSION_ABBR}/php.ini
+    {
+        echo "; start xdebug configuration"
+        echo "zend_extension=/usr/lib/php${PHP_VERSION_ABBR}/modules/xdebug.so"
+        echo "xdebug.output_dir=/tmp"
+        echo "xdebug.start_with_request=trigger"
+        echo "xdebug.remote_handler=dbgp"
+        echo "xdebug.log=/tmp/xdebug.log"
+        echo "xdebug.discover_client_host=1"
+        if [ "${XDEBUG_PROFILER_ON}" = 1 ]; then
+            # set up xdebug profiler
+            echo "xdebug.mode=debug,profile"
+            echo "xdebug.profiler_output_name=cachegrind.out.%s"
+        else
+            echo "xdebug.mode=debug"
+        fi
+        if [ "${XDEBUG_CLIENT_PORT}" != "" ]; then
+            # manually set up host port, if set
+            echo "xdebug.client_port=${XDEBUG_CLIENT_PORT}"
+        else
+            echo "xdebug.client_port=9003"
+        fi
+        if [ "${XDEBUG_CLIENT_HOST}" != "" ]; then
+            # manually set up host, if set
+            echo "xdebug.client_host=${XDEBUG_CLIENT_HOST}"
+        fi
+        if [ "${XDEBUG_IDE_KEY}" != "" ]; then
+            # set up ide key, if set
+            echo "xdebug.idekey=${XDEBUG_IDE_KEY}"
+        fi
+        echo "; end xdebug configuration"
+    } >> /etc/php${PHP_VERSION_ABBR}/php.ini
 
     # Ensure only configure this one time
     touch /etc/php-xdebug-configured

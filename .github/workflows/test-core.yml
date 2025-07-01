@@ -26,8 +26,8 @@ on:
 jobs:
   collect-production-targets:
     name: "Discover Production Docker Targets"
-    runs-on: ubuntu-latest
     if: ${{ inputs.is_production_docker }}
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
     - name: Collect OpenEMR Prod Dockerfiles
@@ -58,6 +58,10 @@ jobs:
     needs: [collect-production-targets]
     if: ${{ inputs.is_production_docker }}
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: docker/openemr
     strategy:
       fail-fast: false
       matrix:
@@ -78,6 +82,10 @@ jobs:
     name: "Development Docker Alpine-${{ inputs.alpine_version }} (PHP ${{ matrix.php_version }}, ${{ matrix.mode }})"
     if: ${{ !inputs.is_production_docker }}
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: docker/openemr
     strategy:
       fail-fast: false
       matrix:
