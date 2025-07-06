@@ -16,7 +16,7 @@ version: '3.1'
 services:
   mysql:
     restart: always
-    image: mariadb:11.4
+    image: mariadb:11.8
     command: ['mariadbd','--character-set-server=utf8mb4']
     volumes:
     - databasevolume:/var/lib/mysql
