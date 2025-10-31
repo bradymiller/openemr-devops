@@ -46,6 +46,7 @@ RUN apk add --no-cache \
     php${PHP_VERSION_ABBR}-calendar \
     php${PHP_VERSION_ABBR}-ctype \
     php${PHP_VERSION_ABBR}-curl \
+    php${PHP_VERSION_ABBR}-dom \
     php${PHP_VERSION_ABBR}-fileinfo \
     php${PHP_VERSION_ABBR}-fpm \
     php${PHP_VERSION_ABBR}-gd \
@@ -60,6 +61,7 @@ RUN apk add --no-cache \
     php${PHP_VERSION_ABBR}-pdo \
     php${PHP_VERSION_ABBR}-pdo_mysql \
     php${PHP_VERSION_ABBR}-pecl-apcu \
+    php${PHP_VERSION_ABBR}-pecl-imagick \
     php${PHP_VERSION_ABBR}-phar \
     php${PHP_VERSION_ABBR}-redis \
     php${PHP_VERSION_ABBR}-session \
