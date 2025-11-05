@@ -43,6 +43,7 @@ RUN apk add --no-cache \
 RUN apk add --no-cache \
     php${PHP_VERSION_ABBR} \
     php${PHP_VERSION_ABBR}-apache2 \
+    php${PHP_VERSION_ABBR}-bcmath \
     php${PHP_VERSION_ABBR}-calendar \
     php${PHP_VERSION_ABBR}-ctype \
     php${PHP_VERSION_ABBR}-curl \
