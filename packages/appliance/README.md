@@ -13,7 +13,7 @@ This process will install a fully-functional, secured, preconfigured OpenEMR 7.0
 
 From your fresh Ubuntu install, run the following command.
 ```
-curl -s https://raw.githubusercontent.com/openemr/openemr-devops/master/packages/appliance/launch.sh | bash -s
+curl -s https://www.open-emr.org/install | sudo bash -s
 ```
 This will pause for some time. If you'd like, you can monitor the process by tailing the generated log at `/var/log/appliance-launch.log` from another terminal. Once the installation completes, you may continue.
 
