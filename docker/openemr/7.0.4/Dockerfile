@@ -137,6 +137,7 @@ COPY upgrade/docker-version \
      upgrade/fsupgrade-5.sh \
      upgrade/fsupgrade-6.sh \
      upgrade/fsupgrade-7.sh \
+     upgrade/fsupgrade-8.sh \
      /root/
 RUN chmod 500 \
     /root/fsupgrade-1.sh \
@@ -145,7 +146,8 @@ RUN chmod 500 \
     /root/fsupgrade-4.sh \
     /root/fsupgrade-5.sh \
     /root/fsupgrade-6.sh \
-    /root/fsupgrade-7.sh
+    /root/fsupgrade-7.sh \
+    /root/fsupgrade-8.sh
 #fix issue with apache2 dying prematurely
 RUN mkdir -p /run/apache2
 #Copy dev tools library to root
