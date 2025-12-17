@@ -45,6 +45,7 @@ RUN apk add --no-cache \
     shadow
 
 # Install PHP and its extensions
+#  (note opcache was brought into core PHP for PHP 8.5+, so unable to install separate extension for those versions.)
 RUN apk add --no-cache \
     php${PHP_VERSION_ABBR} \
     php${PHP_VERSION_ABBR}-apache2 \
@@ -62,7 +63,7 @@ RUN apk add --no-cache \
     php${PHP_VERSION_ABBR}-ldap \
     php${PHP_VERSION_ABBR}-mbstring \
     php${PHP_VERSION_ABBR}-mysqli \
-    php${PHP_VERSION_ABBR}-opcache \
+    "$(if [ "${PHP_VERSION}" = "8.2" ] || [ "${PHP_VERSION}" = "8.3" ] || [ "${PHP_VERSION}" = "8.4" ]; then echo php${PHP_VERSION_ABBR}-opcache; fi)" \
     php${PHP_VERSION_ABBR}-openssl \
     php${PHP_VERSION_ABBR}-pdo \
     php${PHP_VERSION_ABBR}-pdo_mysql \
