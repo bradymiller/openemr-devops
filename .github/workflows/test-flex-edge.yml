@@ -34,4 +34,4 @@ jobs:
       alpine_version: "edge"
       php_versions: '["8.3", "8.4", "8.5"]'
       is_flex_coverage_docker: true
-      flex_coverage_php_version: '8.4'
+      flex_coverage_php_version: '8.5'
