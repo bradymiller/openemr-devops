@@ -194,7 +194,7 @@ resetOpenemr() {
 installOpenemr() {
     echo "Re-installing OpenEMR"
     cp /root/auto_configure.php /var/www/localhost/htdocs/
-    php /var/www/localhost/htdocs/auto_configure.php -f "${CONFIGURATION}"
+    /usr/local/bin/php /var/www/localhost/htdocs/auto_configure.php -f "${CONFIGURATION}"
     rm -f /var/www/localhost/htdocs/auto_configure.php
 }
 
@@ -261,7 +261,7 @@ upgradeOpenEMR() {
     sed -i "1s@^@<?php \$_GET['site'] = 'default'; ?>@" /var/www/localhost/htdocs/openemr/sql_upgrade_temp.php
     
     # Execute the modified upgrade script
-    php -f /var/www/localhost/htdocs/openemr/sql_upgrade_temp.php
+    /usr/local/bin/php -f /var/www/localhost/htdocs/openemr/sql_upgrade_temp.php
     
     # Clean up temporary file
     rm -f /var/www/localhost/htdocs/openemr/sql_upgrade_temp.php
@@ -645,7 +645,7 @@ importRandomPatients() {
     java -jar synthea-with-dependencies.jar --exporter.fhir.export false --exporter.ccda.export true --generate.only_alive_patients true -p "$1"
     sed -i "s@exit;@//exit;@" /var/www/localhost/htdocs/openemr/contrib/util/ccda_import/import_ccda.php
     export OPENEMR_ENABLE_CCDA_IMPORT=1
-    php /var/www/localhost/htdocs/openemr/contrib/util/ccda_import/import_ccda.php --sourcePath=/root/synthea/output/ccda --site=default --openemrPath=/var/www/localhost/htdocs/openemr --isDev="$2"
+    /usr/local/bin/php /var/www/localhost/htdocs/openemr/contrib/util/ccda_import/import_ccda.php --sourcePath=/root/synthea/output/ccda --site=default --openemrPath=/var/www/localhost/htdocs/openemr --isDev="$2"
     sed -i "s@//exit;@exit;@" /var/www/localhost/htdocs/openemr/contrib/util/ccda_import/import_ccda.php
     echo "Completed run for following number of random patients: ${1}"
 }
@@ -702,7 +702,7 @@ generateMultisiteBank() {
         rm -fr "/var/www/localhost/htdocs/openemr/sites/${run}"
         rm /tmp/setup_dump.sql
         echo "adding ${run} multisite"
-        php /var/www/localhost/htdocs/openemr/contrib/util/installScripts/InstallerAuto.php rootpass="${MYSQL_ROOT_PASS}" server="${MYSQL_HOST}" port="${CUSTOM_PORT}" loginhost=% login="${run}" pass="${run}" dbname="${run}" site="${run}" source_site_id=default clone_database=yes
+        /usr/local/bin/php /var/www/localhost/htdocs/openemr/contrib/util/installScripts/InstallerAuto.php rootpass="${MYSQL_ROOT_PASS}" server="${MYSQL_HOST}" port="${CUSTOM_PORT}" loginhost=% login="${run}" pass="${run}" dbname="${run}" site="${run}" source_site_id=default clone_database=yes
         chown -R apache "/var/www/localhost/htdocs/openemr/sites/${run}"
         # shellcheck disable=SC2312  # Pipeline return value is intentionally ignored
         find "/var/www/localhost/htdocs/openemr/sites/${run}" -type d -print0 | xargs -0 chmod 500 || true

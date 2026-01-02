@@ -20,4 +20,4 @@
 # ============================================================================
 
 # Change to /root directory where unlock_admin.php is located
-cd /root && php ./unlock_admin.php "$1"
+cd /root && /usr/local/bin/php ./unlock_admin.php "$1"

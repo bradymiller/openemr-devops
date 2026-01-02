@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================================
-# OpenEMR Apache Container Startup Script
+# OpenEMR Apache + PHP-FPM Container Startup Script (Static Binary Build)
 # ============================================================================
 # This script runs when the container starts and handles all setup tasks needed
-# to get OpenEMR running under Apache. It performs automated installation,
-# configuration, and startup coordination for OpenEMR in containerized environments.
+# to get OpenEMR running under Apache with PHP-FPM using static binaries.
+# It performs automated installation, configuration, and startup coordination
+# for OpenEMR in containerized environments.
 #
 # Key Features:
 #   - Automated database setup and configuration
@@ -14,6 +15,7 @@
 #   - Upgrade detection and execution
 #   - File permissions management
 #   - Process control and error handling
+#   - PHP-FPM startup and management (using static binaries)
 #
 # Environment Variables:
 #   See the script sections below for detailed environment variable documentation
@@ -183,7 +185,7 @@ wait_for_redis() {
 # Checks if OpenEMR has already been configured.
 # Returns "1" if configured, "0" if not configured yet.
 is_configured() {
-    php -r "if (is_file('${SQLCONF_FILE}')) { require '${SQLCONF_FILE}'; echo isset(\$config) && \$config ? 1 : 0; } else { echo 0; }" 2>/dev/null | tail -1 || echo 0
+    /usr/local/bin/php -r "if (is_file('${SQLCONF_FILE}')) { require '${SQLCONF_FILE}'; echo isset(\$config) && \$config ? 1 : 0; } else { echo 0; }" 2>/dev/null | tail -1 || echo 0
 }
 
 # ============================================================================
@@ -463,11 +465,12 @@ configure_redis_sessions() {
     # Use a separate config file instead of sed to avoid pattern matching issues
     # (see openemr/openemr#9473)
     echo "Configuring Redis sessions: ${redis_path}"
-    # shellcheck disable=SC2154  # PHP_VERSION_ABBR is set by environment/Dockerfile
+    # For static PHP binaries, config directory is /usr/local/etc/php/conf.d/
+    mkdir -p /usr/local/etc/php/conf.d
     {
         echo "session.save_handler = redis"
         echo "session.save_path = \"${redis_path}\""
-    } > "/etc/php${PHP_VERSION_ABBR}/conf.d/99-redis-sessions.ini"
+    } > "/usr/local/etc/php/conf.d/99-redis-sessions.ini"
     
     # Only create marker file if configuration was successful
     # This prevents false positives when Redis is unavailable
@@ -601,7 +604,7 @@ run_auto_configure() {
     # We need to split it and pass as separate arguments, not use -f flag (which doesn't exist)
     # Split CONFIGURATION into an array and pass each element as a separate argument
     read -r -a config_args <<< "${CONFIGURATION}"
-    php -c auto_configure.ini auto_configure.php "${config_args[@]}" || return 1
+    /usr/local/bin/php -c auto_configure.ini auto_configure.php "${config_args[@]}" || return 1
 
     # Update heartbeat after PHP execution completes
     [[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat
@@ -691,7 +694,7 @@ check_upgrade
 log_timing "3-UpgradeCheck"
 
 # Step 4: Verify configuration exists (critical check for worker containers)
-CONFIG=$(php -r "require_once('${SQLCONF_FILE}'); echo \$config;")
+CONFIG=$(/usr/local/bin/php -r "require_once('${SQLCONF_FILE}'); echo \$config;")
 if [[ "${AUTHORITY}" = "no" ]] && [[ "${CONFIG}" = "0" ]]; then
     echo "Critical failure! An OpenEMR worker is trying to run on a missing configuration." >&2
     echo " - Is this due to a Kubernetes grant hiccup?" >&2
@@ -814,28 +817,10 @@ log_timing "7-GlobalSettings"
 # Step 8: Configure Redis sessions (if available)
 log_timing "8-RedisStart"
 if [[ -n "${REDIS_SERVER:-}" ]] && [[ ! -f /etc/php-redis-configured ]]; then
-    # Support phpredis build from source (if PHPREDIS_BUILD is set)
-    if [[ "${PHPREDIS_BUILD:-}" != "" ]]; then
-      apk update
-      apk del --no-cache "php${PHP_VERSION_ABBR}-redis"
-      apk add --no-cache git "php${PHP_VERSION_ABBR}-dev" "php${PHP_VERSION_ABBR}-pecl-igbinary" gcc make g++
-      mkdir /tmpredis
-      cd /tmpredis
-      git clone https://github.com/phpredis/phpredis.git
-      cd /tmpredis/phpredis
-      if [[ "${PHPREDIS_BUILD}" != "develop" ]]; then
-          git reset --hard "${PHPREDIS_BUILD}"
-      fi
-      phpize83
-      ./configure --with-php-config=/usr/bin/php-config83 --enable-redis-igbinary
-      nproc_output=$(nproc --all) || nproc_output=1
-      make -j "${nproc_output}"
-      make install
-      echo "extension=redis" > "/etc/php${PHP_VERSION_ABBR}/conf.d/20_redis.ini"
-      rm -fr /tmpredis/phpredis
-      apk del --no-cache git "php${PHP_VERSION_ABBR}-dev" gcc make g++
-      cd "${OE_ROOT}"
-    fi
+    # Note: Static PHP binaries already include Redis extension if compiled in
+    # PHPREDIS_BUILD is not supported with static binaries (requires php-dev packages)
+    # The Redis extension should already be available in the static binary
+    mkdir -p /usr/local/etc/php/conf.d
     
     # Only create marker if configuration succeeds
     # shellcheck disable=SC2310  # set -e behavior in conditionals is intentional
@@ -863,6 +848,11 @@ if [[ "${AUTHORITY}" = "yes" ]] || [[ "${SWARM_MODE}" = "yes" ]]; then
             
             # Lock down sites/default directory
             chmod 500 sites/default 2>/dev/null || true
+            
+            # Ensure Smarty cache directories are writable (needed for template compilation)
+            # These directories must remain writable at runtime
+            find sites/default/documents/smarty -type d -exec chmod 700 {} + 2>/dev/null || true
+            find sites/default/documents/smarty -type f -exec chmod 600 {} + 2>/dev/null || true
             
             # Ensure openemr.sh stays executable
             chmod 700 openemr.sh 2>/dev/null || true
@@ -898,21 +888,13 @@ if [[ "${SWARM_MODE}" != "yes" ]] ||
 fi
 log_timing "10-CertPerms"
 
-# Step 11: Configure XDebug or PHP optimizations
-if [[ "${XDEBUG_IDE_KEY:-}" != "" ]] || [[ "${XDEBUG_ON:-}" = 1 ]]; then
-    sh xdebug.sh
-    # Disable opcache when XDebug is enabled (they're incompatible)
-    if [[ ! -f /etc/php-opcache-jit-configured ]]; then
-        echo "opcache.enable=0" >> "/etc/php${PHP_VERSION_ABBR}/php.ini"
-        touch /etc/php-opcache-jit-configured
-    fi
-else
-    # Configure opcache JIT if XDebug is not being used
-    if [[ ! -f /etc/php-opcache-jit-configured ]]; then
-        echo "opcache.jit=tracing" >> "/etc/php${PHP_VERSION_ABBR}/php.ini"
-        echo "opcache.jit_buffer_size=100M" >> "/etc/php${PHP_VERSION_ABBR}/php.ini"
-        touch /etc/php-opcache-jit-configured
-    fi
+# Step 11: Configure PHP optimizations (XDebug not supported with static binaries)
+# Note: XDebug is not available with static PHP binaries, so we skip that configuration
+if [[ ! -f /etc/php-opcache-jit-configured ]]; then
+    # Configure opcache JIT for better performance
+    echo "opcache.jit=tracing" >> "/usr/local/etc/php/php.ini"
+    echo "opcache.jit_buffer_size=100M" >> "/usr/local/etc/php/php.ini"
+    touch /etc/php-opcache-jit-configured
 fi
 
 # Step 12: Mark swarm completion (if in swarm mode)
@@ -935,9 +917,18 @@ echo "Love OpenEMR? You can now support the project via the open collective:"
 echo " > https://opencollective.com/openemr/donate"
 echo
 
-# Step 15: Start Apache (if this container is an operator)
+# Step 15: Start PHP-FPM and Apache (if this container is an operator)
 log_timing "15-PreApache"
 if [[ "${OPERATOR}" = "yes" ]]; then
+    # Ensure Smarty cache directories are writable at runtime (important for volumes)
+    # This needs to run before Apache starts to ensure templates can be compiled
+    for site_dir in sites/*/documents/smarty; do
+        if [[ -d "${site_dir}" ]]; then
+            find "${site_dir}" -type d -exec chmod 700 {} + 2>/dev/null || true
+            find "${site_dir}" -type f -exec chmod 600 {} + 2>/dev/null || true
+        fi
+    done
+    
     SCRIPT_END_TIME=$(date +%s.%N 2>/dev/null || date +%s)
     TOTAL_DURATION=0
     if command -v python3 >/dev/null 2>&1; then
@@ -945,7 +936,24 @@ if [[ "${OPERATOR}" = "yes" ]]; then
     else
         TOTAL_DURATION=$((SCRIPT_END_TIME - SCRIPT_START_TIME))
     fi
-    echo "[TIMING] Total script execution time: ${TOTAL_DURATION}s before Apache start"
+    echo "[TIMING] Total script execution time: ${TOTAL_DURATION}s before PHP-FPM/Apache start"
+    echo 'Starting PHP-FPM...'
+    # Create PHP-FPM log directory (needed even if /var/log is a volume)
+    mkdir -p /var/log/php-fpm
+    # Start PHP-FPM in the background (not with exec since we need Apache to also run)
+    # Use -c flag to specify php.ini location instead of PHPRC environment variable
+    /usr/local/bin/php-fpm -c /usr/local/etc/php/php.ini --fpm-config /usr/local/etc/php-fpm.conf --nodaemonize &
+    PHP_FPM_PID=$!
+    
+    # Wait a moment for PHP-FPM to start
+    sleep 2
+    
+    # Verify PHP-FPM started successfully
+    if ! kill -0 "${PHP_FPM_PID}" 2>/dev/null; then
+        echo "Error: PHP-FPM failed to start" >&2
+        exit 1
+    fi
+    
     echo 'Starting Apache!'
     exec /usr/sbin/httpd -D FOREGROUND
 fi
