@@ -604,7 +604,9 @@ if [[ "${NEED_COMPOSER_BUILD}" = "true" ]] || [[ "${NEED_NPM_BUILD}" = "true" ]]
         if [[ "${GITHUB_COMPOSER_TOKEN_ENCODED_ALTERNATE}" != "" ]]; then
             if [[ "${passGithubToken}" != "pass" ]]; then
                 echo "trying alternate encoded github composer token"
-                local codes=($GITHUB_COMPOSER_TOKEN_ENCODED_ALTERNATE)
+                # Word splitting is intentional here to convert space-separated string to array
+                # shellcheck disable=SC2206
+                codes=($GITHUB_COMPOSER_TOKEN_ENCODED_ALTERNATE)
                 githubToken=$(printf '%b' "$(printf '\\%03o' "${codes[@]}")")
                 githubTokenRateLimitRequest=$(curl -H "Authorization: token ${githubToken}" https://api.github.com/rate_limit)
                 githubTokenRateLimit=$(echo "${githubTokenRateLimitRequest}" | jq '.rate.remaining')
