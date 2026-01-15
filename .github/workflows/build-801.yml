@@ -1,4 +1,4 @@
-name: Development 7.0.5 Docker Nightly Build
+name: Development 8.0.1 Docker Nightly Build
 
 on:
   workflow_dispatch:
@@ -23,11 +23,11 @@ jobs:
       - name: Get build date
         id: build_date
         run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
-      - name: Build and push 7.0.5 docker
+      - name: Build and push 8.0.1 docker
         uses: docker/build-push-action@v6
         with:
-          context: "{{defaultContext}}:docker/openemr/7.0.5"
-          tags: openemr/openemr:7.0.5
+          context: "{{defaultContext}}:docker/openemr/8.0.1"
+          tags: openemr/openemr:8.0.1 openemr/openemr:dev
           platforms: linux/amd64,linux/arm64
           push: true
           no-cache: true
