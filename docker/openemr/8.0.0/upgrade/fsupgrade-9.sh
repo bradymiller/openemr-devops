@@ -1,9 +1,9 @@
 #!/bin/sh
-# Upgrade number 8 for OpenEMR docker
-#  From prior version 7.0.3 (needed for the sql upgrade script).
-priorOpenemrVersion="7.0.3"
+# Upgrade number 9 for OpenEMR docker
+#  From prior version 7.0.4 (needed for the sql upgrade script).
+priorOpenemrVersion="7.0.4"
 
-echo "Start: Upgrade to docker-version 8"
+echo "Start: Upgrade to docker-version 9"
 
 # Perform codebase upgrade on each directory in sites/
 for dir in $(find /var/www/localhost/htdocs/openemr/sites/* -maxdepth 0 -type d ); do
@@ -78,4 +78,4 @@ for dirdata in $(find /var/www/localhost/htdocs/openemr/sites/* -maxdepth 0 -typ
     echo "Completed: Upgrade database for ${sitename} from ${priorOpenemrVersion}"
 done
 
-echo "Completed: Upgrade to docker-version 8"
+echo "Completed: Upgrade to docker-version 9"
