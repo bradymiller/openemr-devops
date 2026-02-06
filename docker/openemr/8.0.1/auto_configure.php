@@ -29,6 +29,8 @@
 // This gives us access to all OpenEMR classes, including the Installer class
 require_once('/var/www/localhost/htdocs/openemr/vendor/autoload.php');
 
+use OpenEMR\Common\Logging\SystemLogger;
+
 // ============================================================================
 // DEFAULT CONFIGURATION SETTINGS
 // ============================================================================
@@ -161,7 +163,7 @@ $installSettings = $tempInstallSettings;
 //
 // The quick_install() method does all of this automatically.
 
-$installer = new Installer($installSettings);
+$installer = new Installer($installSettings, new SystemLogger());
 
 // Run the installer and check if it succeeded
 if (! $installer->quick_install()) {

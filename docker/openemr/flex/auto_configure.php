@@ -38,6 +38,8 @@ if (file_exists('/var/www/localhost/htdocs/openemr/library/authentication/passwo
     require_once('/var/www/localhost/htdocs/openemr/library/authentication/password_hashing.php');
 }
 
+use OpenEMR\Common\Logging\SystemLogger;
+
 // ============================================================================
 // DEFAULT CONFIGURATION SETTINGS
 // ============================================================================
@@ -193,7 +195,7 @@ $installSettings = $tempInstallSettings;
 // The quick_install() method does all of this automatically.
 
 // Install and configure OpenEMR using the Installer class
-$installer = new Installer($installSettings);
+$installer = new Installer($installSettings, new SystemLogger());
 
 // Run the installer and check if it succeeded
 if (! $installer->quick_install()) {
