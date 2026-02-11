@@ -27,7 +27,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: "{{defaultContext}}:docker/openemr/8.0.1"
-          tags: openemr/openemr:8.0.1, openemr/openemr:dev
+          tags: openemr/openemr:8.0.1, openemr/openemr:next, openemr/openemr:dev
           platforms: linux/amd64,linux/arm64
           push: true
           no-cache: true
