@@ -255,8 +255,8 @@ wait_for_redis() {
     IFS=: read -r redis_host redis_port _ <<< "${REDIS_SERVER}"
     redis_port="${redis_port:-6379}"  # Default Redis port
 
-    # Try to connect to Redis using netcat
-    local -i retries=10
+    # Try to connect to Redis using netcat (allow time for DNS and service startup)
+    local -i retries=30
     while (( retries-- > 0 )); do
         if command -v nc >/dev/null 2>&1 && nc -z "${redis_host}" "${redis_port}" >/dev/null 2>&1; then
             echo "Redis is ready!"
@@ -265,7 +265,7 @@ wait_for_redis() {
         sleep 1
     done
 
-    echo "Warning: Redis at ${REDIS_SERVER} not available, using file sessions" >&2
+    echo "ERROR: Redis at ${REDIS_SERVER} not reachable after 30 retries" >&2
     return 1
 }
 
@@ -906,13 +906,27 @@ fi
 if [[ "${REDIS_SERVER}" != "" ]] &&
    [[ ! -f /etc/php-redis-configured ]]; then
 
+    # Wait for Redis to be available before configuring sessions.
+    # If Redis is configured but unreachable, fail loudly rather than silently
+    # falling back to file sessions (which would break downstream orchestration).
+    # shellcheck disable=SC2310  # set -e behavior in conditionals is intentional
+    if ! wait_for_redis; then
+        echo "ERROR: Redis server '${REDIS_SERVER}' is configured but not reachable after retries. Exiting."
+        exit 1
+    fi
+
     # Support the following redis auth:
     #   No username and No password set (using redis default user with nopass set)
     #   Both username and password set (using the redis user and pertinent password)
     #   Only password set (using redis default user and pertinent password)
     #   NOTE that only username set is not supported (in this case will ignore the username
     #      and use no username and no password set mode)
-    REDIS_PATH="tcp://${REDIS_SERVER}:6379"
+    # REDIS_SERVER may be "host" or "host:port"; avoid double port (tcp://host:6379:6379)
+    if [[ "${REDIS_SERVER}" == *:* ]]; then
+        REDIS_PATH="tcp://${REDIS_SERVER}"
+    else
+        REDIS_PATH="tcp://${REDIS_SERVER}:6379"
+    fi
     if [[ "${REDIS_USERNAME}" != "" ]] &&
        [[ "${REDIS_PASSWORD}" != "" ]]; then
         echo "redis setup with username and password"
