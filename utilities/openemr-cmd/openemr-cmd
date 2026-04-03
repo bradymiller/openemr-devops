@@ -293,6 +293,7 @@ wt_compose_cmd() {
 # WORKTREE SUBCOMMANDS
 # ============================================================================
 
+# shellcheck disable=SC2004
 cmd_worktree_add() {
     local branch="" env="${DEFAULT_ENV}" start=false new_branch=false
 
