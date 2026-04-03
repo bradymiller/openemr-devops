@@ -23,8 +23,7 @@ VERSION="1.0.26"
 # ============================================================================
 # WORKTREE STATE MANAGEMENT
 # ============================================================================
-# State file lives in the primary repo root and is gitignored.
-# Add to .gitignore: .worktrees.json
+# State file (.worktrees.json) lives in the primary repo root and is gitignored.
 OPENEMR_ROOT="${OPENEMR_ROOT:-$(
     _root=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "${HOME}/dev/openemr"; exit 0; }
     # If state file is here, this is already the primary repo
