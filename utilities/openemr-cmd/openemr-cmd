@@ -31,7 +31,8 @@ OPENEMR_ROOT="${OPENEMR_ROOT:-$(
     # worktree it returns an absolute path inside the primary repo's .git.
     # Using realpath on both lets us compare them reliably.
     _common=$(git rev-parse --git-common-dir 2>/dev/null)
-    _primary=$(dirname "$(realpath "${_common}")")
+    _common_real=$(realpath "${_common}")
+    _primary=$(dirname "${_common_real}")
     if [[ "${_primary}" != "${_root}" ]] && [[ -d "${_primary}" ]]; then
         # We are in a linked worktree — always use the primary repo root
         # so the state file is shared, even on first run before it exists.
