@@ -293,7 +293,6 @@ wt_compose_cmd() {
 # WORKTREE SUBCOMMANDS
 # ============================================================================
 
-# shellcheck disable=SC2004
 cmd_worktree_add() {
     local branch="" env="${DEFAULT_ENV}" start=false new_branch=false
 
@@ -365,16 +364,16 @@ cmd_worktree_add() {
 }
 
 cmd_worktree_remove() {
-    local branch="" purge=false
+    local branch="" purge=true
 
     while [[ $# -gt 0 ]]; do
         case $1 in
-            --purge) purge=true; shift ;;
+            --keep-volumes) purge=false; shift ;;
             -*)      wt_die "Unknown option: $1" ;;
             *)       if [[ -z "${branch}" ]]; then branch=$1; else wt_die "Unexpected argument: $1"; fi; shift ;;
         esac
     done
-    if [[ -z "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree remove <branch> [--purge]"; fi
+    if [[ -z "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree remove <branch> [--keep-volumes]"; fi
 
     if ! [[ -f "${WT_STATE_FILE}" ]]; then wt_die "No worktrees found (state file missing)"; fi
     local dir
@@ -382,7 +381,7 @@ cmd_worktree_remove() {
     if [[ -z "${dir}" ]]; then wt_die "No worktree found for branch '${branch}'"; fi
 
     echo "This will remove worktree '${branch}' at ${dir}."
-    ${purge} && echo "  --purge: Docker volumes will also be deleted."
+    if ! ${purge}; then echo "  --keep-volumes: Docker volumes will be preserved."; fi
     read -rp "Continue? [y/N] " confirm
     [[ "${confirm}" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
 
@@ -414,11 +413,23 @@ cmd_worktree_up() {
 }
 
 cmd_worktree_down() {
-    local branch=${1:-}
-    if [[ -z "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree down <branch>"; fi
+    local branch="" keep_volumes=false
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --keep-volumes) keep_volumes=true; shift ;;
+            -*)  wt_die "Unknown option: $1" ;;
+            *)   if [[ -z "${branch}" ]]; then branch=$1; else wt_die "Unexpected argument: $1"; fi; shift ;;
+        esac
+    done
+    if [[ -z "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree down <branch> [--keep-volumes]"; fi
     if ! [[ -f "${WT_STATE_FILE}" ]]; then wt_die "No worktrees found"; fi
     wt_info "Stopping stack for '${branch}'"
-    wt_compose_cmd "${branch}" down
+    if ${keep_volumes}; then
+        wt_compose_cmd "${branch}" down
+    else
+        wt_compose_cmd "${branch}" down --volumes
+    fi
 }
 
 cmd_worktree_list() {
@@ -432,17 +443,21 @@ cmd_worktree_list() {
     printf "%-30s %-12s %-8s %-10s %s\n" "------" "---" "------" "------" "---------"
     printf "%-30s %-12s %-8s %-10s %s\n" "${main_branch} (main)" "-" "-" "-" "${OPENEMR_ROOT}"
 
+    if [[ ! -f "${WT_STATE_FILE}" ]]; then
+        echo "(no worktrees)"
+        return
+    fi
     local state_content
     state_content=$(cat "${WT_STATE_FILE}")
-    if [[ ! -f "${WT_STATE_FILE}" ]] || [[ "${state_content}" == "{}" ]]; then
+    if [[ "${state_content}" == "{}" ]]; then
         echo "(no worktrees)"
         return
     fi
 
+    check_docker_compose_install
     jq_output=$(jq -r 'to_entries[] | [.key, (.value.offset|tostring), .value.dir, .value.env] | @tsv' "${WT_STATE_FILE}")
     while IFS=$'\t' read -r branch offset dir env; do
         status="stopped"
-        check_docker_compose_install
         compose_subdir=$(wt_compose_subdir "${env}")
         slug=$(wt_slug "${branch}")
         ps_output=$("${DOCKER_COMPOSE_CMD[@]}" \
@@ -489,9 +504,9 @@ cmd_worktree() {
             echo ""
             echo "  add <branch> [--env easy|easy-light|easy-redis] [--start]"
             echo "                            Create worktree (default env: easy)"
-            echo "  remove <branch> [--purge] Remove worktree (--purge deletes DB volumes)"
+            echo "  remove <branch> [--keep-volumes] Remove worktree (volumes deleted by default)"
             echo "  up <branch>               Start Docker stack for worktree"
-            echo "  down <branch>             Stop Docker stack for worktree"
+            echo "  down <branch> [--keep-volumes]  Stop Docker stack for worktree (volumes deleted by default)"
             echo "  list                      List all worktrees and status"
             echo "  regen <branch>            Regenerate override/env files"
             exit 1
@@ -883,9 +898,9 @@ if [[ $# -eq 0 || "${FIRST_ARG}" = '--help' || "${FIRST_ARG}" = '-h' ]]; then
     echo 'worktree-management:'
     echo "  worktree add <branch> [-b] [--env easy|easy-light|easy-redis] [--start]"
     echo "                                     Create a new worktree for branch (default env: easy)"
-    echo "  worktree remove <branch> [--purge] Remove worktree (--purge deletes DB volumes)"
+    echo "  worktree remove <branch> [--keep-volumes] Remove worktree (volumes deleted by default)"
     echo "  worktree up <branch>               Start Docker stack for a worktree"
-    echo "  worktree down <branch>             Stop Docker stack for a worktree"
+    echo "  worktree down <branch> [--keep-volumes]  Stop Docker stack (volumes deleted by default)"
     echo "  worktree list                      List all worktrees and their running status"
     echo "  worktree regen <branch>            Regenerate override/env files for a worktree"
     echo "  wt                                 Alias for worktree"
@@ -1000,11 +1015,12 @@ if insane_id=$(docker ps --filter "name=${INSANE_DEV_DOCKER}" --format "{{.ID}}"
 elif easy_id=$(docker ps --filter "name=${EASY_DEV_DOCKER}" --format "{{.ID}}" | head -n 1); [[ -n "${easy_id}" ]]; then
     CONTAINER_ID="${easy_id}"
 else
-    # Fall back to any running worktree openemr container (openemr-<branch>-openemr-1)
-    worktree_id=$(docker ps --format "{{.Names}}\t{{.ID}}" \
-        | grep -E '^openemr-[^-].*-openemr-1' \
-        | head -n 1 \
-        | awk '{print $2}' || true)
+    # Fall back to any running worktree openemr container, detected via compose labels
+    # (label-based detection is more reliable than regex on container names)
+    worktree_id=$(docker ps \
+        --filter "label=com.docker.compose.service=openemr" \
+        --format "{{.Label \"com.docker.compose.project\"}}\t{{.ID}}" \
+        | grep "^openemr-" | head -n 1 | awk '{print $2}' || true)
     if [[ -n "${worktree_id:-}" ]]; then
         CONTAINER_ID="${worktree_id}"
         worktree_name=$(docker ps --filter "id=${worktree_id}" --format "{{.Names}}")
@@ -1032,25 +1048,33 @@ else
     shift
 fi
 
-# Collect couchdb container — scoped to the same compose project as CONTAINER_ID
-couchdb_id=$(docker ps --filter "name=${COUCHDB_DOCKER}" --format "{{.ID}}" | head -n 1)
-if [[ -z "${couchdb_id:-}" && -n "${CONTAINER_ID:-}" ]]; then
+# Collect couchdb container — prefer project-scoped label lookup when CONTAINER_ID is known
+couchdb_id=""
+if [[ -n "${CONTAINER_ID:-}" ]]; then
     compose_project=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "${CONTAINER_ID}" 2>/dev/null || true)
     if [[ -n "${compose_project:-}" && "${compose_project}" != "<no value>" ]]; then
         couchdb_id=$(docker ps --filter "label=com.docker.compose.project=${compose_project}" \
             --filter "label=com.docker.compose.service=couchdb" --format "{{.ID}}" | head -n 1 || true)
     fi
 fi
+if [[ -z "${couchdb_id:-}" ]]; then
+    # Fall back to name-based search (standard non-worktree environment)
+    couchdb_id=$(docker ps --filter "name=${COUCHDB_DOCKER}" --format "{{.ID}}" | head -n 1)
+fi
 COUCHDB_CONTAINER="${couchdb_id:-}" # Set to empty if not found
 
-# Collect mariadb container — scoped to the same compose project as CONTAINER_ID
-mariadb_id=$(docker ps --filter "name=${MARIADB_DOCKER}" --format "{{.ID}}" | head -n 1)
-if [[ -z "${mariadb_id:-}" && -n "${CONTAINER_ID:-}" ]]; then
+# Collect mariadb container — prefer project-scoped label lookup when CONTAINER_ID is known
+mariadb_id=""
+if [[ -n "${CONTAINER_ID:-}" ]]; then
     compose_project=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "${CONTAINER_ID}" 2>/dev/null || true)
     if [[ -n "${compose_project:-}" && "${compose_project}" != "<no value>" ]]; then
         mariadb_id=$(docker ps --filter "label=com.docker.compose.project=${compose_project}" \
             --filter "label=com.docker.compose.service=mysql" --format "{{.ID}}" | head -n 1 || true)
     fi
+fi
+if [[ -z "${mariadb_id:-}" ]]; then
+    # Fall back to name-based search (standard non-worktree environment)
+    mariadb_id=$(docker ps --filter "name=${MARIADB_DOCKER}" --format "{{.ID}}" | head -n 1)
 fi
 MARIADB_CONTAINER_ID="${mariadb_id:-}" # Set to empty if not found
 
