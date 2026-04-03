@@ -276,7 +276,7 @@ wt_compose_cmd() {
     local dir env compose_subdir
     dir=$(wt_state_get "${branch}" dir)
     env=$(wt_state_get "${branch}" env)
-    if ! [[ -n "${dir}" ]]; then wt_die "No worktree found for branch '${branch}'"; fi
+    if [[ -z "${dir}" ]]; then wt_die "No worktree found for branch '${branch}'"; fi
     compose_subdir=$(wt_compose_subdir "${env}")
     check_docker_compose_install
     local slug
@@ -293,6 +293,7 @@ wt_compose_cmd() {
 # WORKTREE SUBCOMMANDS
 # ============================================================================
 
+# shellcheck disable=SC2004
 cmd_worktree_add() {
     local branch="" env="${DEFAULT_ENV}" start=false new_branch=false
 
@@ -305,7 +306,7 @@ cmd_worktree_add() {
             *)               if [[ -z "${branch}" ]]; then branch=$1; else wt_die "Unexpected argument: $1"; fi; shift ;;
         esac
     done
-    if ! [[ -n "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree add <branch> [-b] [--env easy|easy-light|easy-redis] [--start]"; fi
+    if [[ -z "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree add <branch> [-b] [--env easy|easy-light|easy-redis] [--start]"; fi
 
     wt_require_cmd git docker jq realpath
     wt_validate_env "${env}"
@@ -313,7 +314,7 @@ cmd_worktree_add() {
 
     local existing
     existing=$(wt_state_get "${branch}" dir || true)
-    if ! [[ -z "${existing}" ]]; then wt_die "Worktree for '${branch}' already exists at ${existing}"; fi
+    if [[ -n "${existing}" ]]; then wt_die "Worktree for '${branch}' already exists at ${existing}"; fi
 
     local compose_subdir
     compose_subdir=$(wt_compose_subdir "${env}")
@@ -399,6 +400,7 @@ cmd_worktree_remove() {
     wt_info "Done. Worktree '${branch}' removed."
 }
 
+# shellcheck disable=SC2004
 cmd_worktree_up() {
     local branch=${1:-}
     if ! [[ -n "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree up <branch>"; fi
