@@ -26,20 +26,19 @@ VERSION="1.0.26"
 # State file (.worktrees.json) lives in the primary repo root and is gitignored.
 OPENEMR_ROOT="${OPENEMR_ROOT:-$(
     _root=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "${HOME}/dev/openemr"; exit 0; }
-    # If state file is here, this is already the primary repo
-    if [[ -f "${_root}/.worktrees.json" ]]; then
-        echo "${_root}"
+    # --git-common-dir resolves to the shared .git directory.
+    # In the primary repo it returns a relative path (.git); in a linked
+    # worktree it returns an absolute path inside the primary repo's .git.
+    # Using realpath on both lets us compare them reliably.
+    _common=$(git rev-parse --git-common-dir 2>/dev/null)
+    _primary=$(dirname "$(realpath "${_common}")")
+    if [[ "${_primary}" != "${_root}" ]] && [[ -d "${_primary}" ]]; then
+        # We are in a linked worktree — always use the primary repo root
+        # so the state file is shared, even on first run before it exists.
+        echo "${_primary}"
     else
-        # --git-common-dir points to the shared .git of the primary repo
-        # from any linked worktree; dirname gives the primary repo root
-        _common=$(git rev-parse --git-common-dir 2>/dev/null)
-        _primary=$(dirname "${_common}")
-        if [[ -f "${_primary}/.worktrees.json" ]]; then
-            echo "${_primary}"
-        else
-            # No state file yet (first run) — fall back to git root
-            echo "${_root}"
-        fi
+        # We are in the primary repo
+        echo "${_root}"
     fi
 )}"
 WORKTREE_PARENT="${WORKTREE_PARENT:-$(dirname "${OPENEMR_ROOT}")}"
@@ -323,9 +322,10 @@ cmd_worktree_add() {
         wt_die "Compose directory not found: ${OPENEMR_ROOT}/${compose_subdir}"
     fi
 
-    local offset dir
+    local offset dir dir_slug
     offset=$(wt_next_offset)
-    dir="${WORKTREE_PARENT}/openemr-wt-${branch}"
+    dir_slug=$(wt_slug "${branch}")
+    dir="${WORKTREE_PARENT}/openemr-wt-${dir_slug}"
 
     wt_info "Creating git worktree for '${branch}' at ${dir}"
     if ${new_branch}; then
@@ -461,14 +461,20 @@ cmd_worktree_list() {
         status="stopped"
         compose_subdir=$(wt_compose_subdir "${env}")
         slug=$(wt_slug "${branch}")
-        ps_output=$("${DOCKER_COMPOSE_CMD[@]}" \
-            --env-file "${dir}/${compose_subdir}/.env" \
-            -p "openemr-${slug}" \
-            -f "${OPENEMR_ROOT}/${compose_subdir}/docker-compose.yml" \
-            -f "${dir}/${compose_subdir}/docker-compose.override.yml" \
-            ps --services --filter "status=running" 2>/dev/null)
-        if echo "${ps_output}" | grep -q openemr; then
-            status="running"
+        if [[ ! -d "${dir}" ]] || \
+           [[ ! -f "${dir}/${compose_subdir}/.env" ]] || \
+           [[ ! -f "${dir}/${compose_subdir}/docker-compose.override.yml" ]]; then
+            status="missing"
+        else
+            ps_output=$("${DOCKER_COMPOSE_CMD[@]}" \
+                --env-file "${dir}/${compose_subdir}/.env" \
+                -p "openemr-${slug}" \
+                -f "${OPENEMR_ROOT}/${compose_subdir}/docker-compose.yml" \
+                -f "${dir}/${compose_subdir}/docker-compose.override.yml" \
+                ps --services --filter "status=running" 2>/dev/null) || true
+            if echo "${ps_output}" | grep -q openemr; then
+                status="running"
+            fi
         fi
         printf "%-30s %-12s %-8s %-10s %s\n" "${branch}" "${env}" "${offset}" "${status}" "${dir}"
     done <<< "${jq_output}"
