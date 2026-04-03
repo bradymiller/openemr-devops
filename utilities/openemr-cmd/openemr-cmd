@@ -26,24 +26,24 @@ VERSION="1.0.26"
 # State file lives in the primary repo root and is gitignored.
 # Add to .gitignore: .worktrees.json
 OPENEMR_ROOT="${OPENEMR_ROOT:-$(
-    _root=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "$HOME/dev/openemr"; exit 0; }
+    _root=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "${HOME}/dev/openemr"; exit 0; }
     # If state file is here, this is already the primary repo
-    if [[ -f "$_root/.worktrees.json" ]]; then
-        echo "$_root"
+    if [[ -f "${_root}/.worktrees.json" ]]; then
+        echo "${_root}"
     else
         # --git-common-dir points to the shared .git of the primary repo
         # from any linked worktree; dirname gives the primary repo root
         _common=$(git rev-parse --git-common-dir 2>/dev/null)
-        _primary=$(dirname "$_common")
-        if [[ -f "$_primary/.worktrees.json" ]]; then
-            echo "$_primary"
+        _primary=$(dirname "${_common}")
+        if [[ -f "${_primary}/.worktrees.json" ]]; then
+            echo "${_primary}"
         else
             # No state file yet (first run) — fall back to git root
-            echo "$_root"
+            echo "${_root}"
         fi
     fi
 )}"
-WORKTREE_PARENT="${WORKTREE_PARENT:-$(dirname "$OPENEMR_ROOT")}"
+WORKTREE_PARENT="${WORKTREE_PARENT:-$(dirname "${OPENEMR_ROOT}")}"
 WT_STATE_FILE="${OPENEMR_ROOT}/.worktrees.json"
 
 # Valid environments (maps to docker/development-<env>/)
@@ -55,43 +55,45 @@ wt_info() { echo "  --> $*"; }
 
 wt_require_cmd() {
     for cmd in "$@"; do
-        command -v "$cmd" &>/dev/null || wt_die "'$cmd' is required but not found"
+        if ! command -v "${cmd}" &>/dev/null; then wt_die "'${cmd}' is required but not found"; fi
     done
 }
 
 wt_init_state() {
-    [[ -f "$WT_STATE_FILE" ]] || echo '{}' > "$WT_STATE_FILE"
+    [[ -f "${WT_STATE_FILE}" ]] || echo '{}' > "${WT_STATE_FILE}"
 }
 
 wt_state_get() {
     local branch=$1 field=$2
-    jq -r --arg b "$branch" --arg f "$field" '.[$b][$f] // empty' "$WT_STATE_FILE"
+    jq -r --arg b "${branch}" --arg f "${field}" '.[$b][$f] // empty' "${WT_STATE_FILE}"
 }
 
 wt_state_set() {
     local branch=$1 offset=$2 dir=$3 env=$4
     local tmp
     tmp=$(mktemp)
-    jq --arg b "$branch" --arg o "$offset" --arg d "$dir" --arg e "$env" \
+    jq --arg b "${branch}" --arg o "${offset}" --arg d "${dir}" --arg e "${env}" \
         '.[$b] = {"offset": ($o|tonumber), "dir": $d, "env": $e}' \
-        "$WT_STATE_FILE" > "$tmp" && mv "$tmp" "$WT_STATE_FILE"
+        "${WT_STATE_FILE}" > "${tmp}"
+    mv "${tmp}" "${WT_STATE_FILE}"
 }
 
 wt_state_remove() {
     local branch=$1
     local tmp
     tmp=$(mktemp)
-    jq --arg b "$branch" 'del(.[$b])' "$WT_STATE_FILE" > "$tmp" && mv "$tmp" "$WT_STATE_FILE"
+    jq --arg b "${branch}" 'del(.[$b])' "${WT_STATE_FILE}" > "${tmp}"
+    mv "${tmp}" "${WT_STATE_FILE}"
 }
 
 wt_next_offset() {
     local used
-    used=$(jq '[.[].offset] | sort | .[]' "$WT_STATE_FILE" 2>/dev/null || true)
+    used=$(jq '[.[].offset] | sort | .[]' "${WT_STATE_FILE}" 2>/dev/null || true)
     local i=1
-    while echo "$used" | grep -qx "$i" 2>/dev/null; do
+    while echo "${used}" | grep -qx "${i}" 2>/dev/null; do
         ((i++))
     done
-    echo "$i"
+    echo "${i}"
 }
 
 wt_compose_subdir() {
@@ -102,9 +104,17 @@ wt_compose_subdir() {
 wt_validate_env() {
     local env=$1
     for valid in "${VALID_ENVS[@]}"; do
-        [[ "$env" == "$valid" ]] && return 0
+        [[ "${env}" == "${valid}" ]] && return 0
     done
-    wt_die "Invalid env '$env'. Valid options: ${VALID_ENVS[*]}"
+    wt_die "Invalid env '${env}'. Valid options: ${VALID_ENVS[*]}"
+}
+
+# Converts a branch name to a Docker-safe slug.
+# Docker resource names (volumes, container names, project names) cannot contain
+# slashes or other special characters that are valid in git branch names.
+# e.g. "feature/my-thing" -> "feature-my-thing"
+wt_slug() {
+    echo "$1" | tr '/' '-' | tr -cd 'a-zA-Z0-9_-' | tr '[:upper:]' '[:lower:]'
 }
 
 # ============================================================================
@@ -114,82 +124,83 @@ wt_validate_env() {
 wt_write_env() {
     local dir=$1 branch=$2 offset=$3 env=$4
     local compose_subdir
-    compose_subdir=$(wt_compose_subdir "$env")
+    compose_subdir=$(wt_compose_subdir "${env}")
 
-    cat > "$dir/$compose_subdir/.env" <<ENVEOF
+    cat > "${dir}/${compose_subdir}/.env" <<ENVEOF
 WT_NAME=${branch}
 WT_ENV=${env}
 WT_OFFSET=${offset}
 OPENEMR_DIR=${dir}
-WT_HTTP_PORT=$((8300 + offset))
-WT_HTTPS_PORT=$((9300 + offset))
-WT_MYSQL_PORT=$((8320 + offset))
-WT_PMA_PORT=$((8310 + offset))
+WT_HTTP_PORT=$((8300 + ${offset}))
+WT_HTTPS_PORT=$((9300 + ${offset}))
+WT_MYSQL_PORT=$((8320 + ${offset}))
+WT_PMA_PORT=$((8310 + ${offset}))
 ENVEOF
 
     # Services only in easy and easy-redis (not light)
-    if [[ "$env" != "easy-light" ]]; then
-        cat >> "$dir/$compose_subdir/.env" <<ENVEOF
-WT_SELENIUM_PORT=$((4444 + offset))
-WT_VNC_PORT=$((7900 + offset))
-WT_COUCHDB_PORT=$((5984 + offset))
-WT_COUCHDB_SSL_PORT=$((6984 + offset))
-WT_MAILPIT_UI_PORT=$((8025 + offset))
-WT_MAILPIT_SMTP_PORT=$((1025 + offset))
+    if [[ "${env}" != "easy-light" ]]; then
+        cat >> "${dir}/${compose_subdir}/.env" <<ENVEOF
+WT_SELENIUM_PORT=$((4444 + ${offset}))
+WT_VNC_PORT=$((7900 + ${offset}))
+WT_COUCHDB_PORT=$((5984 + ${offset}))
+WT_COUCHDB_SSL_PORT=$((6984 + ${offset}))
+WT_MAILPIT_UI_PORT=$((8025 + ${offset}))
+WT_MAILPIT_SMTP_PORT=$((1025 + ${offset}))
 ENVEOF
     fi
 
     # Redis only in easy-redis
-    if [[ "$env" == "easy-redis" ]]; then
-        cat >> "$dir/$compose_subdir/.env" <<ENVEOF
-WT_REDIS_PORT=$((6379 + offset))
+    if [[ "${env}" == "easy-redis" ]]; then
+        cat >> "${dir}/${compose_subdir}/.env" <<ENVEOF
+WT_REDIS_PORT=$((6379 + ${offset}))
 ENVEOF
     fi
 }
 
 wt_write_override() {
     local dir=$1 branch=$2 offset=$3 env=$4
+    local slug
+    slug=$(wt_slug "${branch}")
     local compose_subdir
-    compose_subdir=$(wt_compose_subdir "$env")
+    compose_subdir=$(wt_compose_subdir "${env}")
 
-    local wt_root lib_root env_root
-    wt_root=$(realpath "$dir")
-    lib_root=$(realpath "$OPENEMR_ROOT/docker/library")
-    env_root=$(realpath "$OPENEMR_ROOT/$compose_subdir")
+    local lib_root env_root
+    lib_root=$(realpath "${OPENEMR_ROOT}/docker/library")
+    env_root=$(realpath "${OPENEMR_ROOT}/${compose_subdir}")
 
-    local override_file="$dir/$compose_subdir/docker-compose.override.yml"
+    local override_file="${dir}/${compose_subdir}/docker-compose.override.yml"
 
     # Header + core volumes (all envs)
-    cat > "$override_file" <<OVEOF
+    cat > "${override_file}" <<OVEOF
 # Auto-generated by openemr-cmd worktree add -- do not edit by hand
 # Worktree: ${branch}  Env: ${env}  Offset: ${offset}
 
 volumes:
   databasevolume:
-    name: openemr-${branch}_db
+    name: openemr-${slug}_db
   assetvolume:
-    name: openemr-${branch}_assets
+    name: openemr-${slug}_assets
   themevolume:
-    name: openemr-${branch}_themes
+    name: openemr-${slug}_themes
   sitesvolume:
-    name: openemr-${branch}_sites
+    name: openemr-${slug}_sites
   nodemodules:
-    name: openemr-${branch}_nodemodules
+    name: openemr-${slug}_nodemodules
   vendordir:
-    name: openemr-${branch}_vendor
+    name: openemr-${slug}_vendor
   ccdanodemodules:
-    name: openemr-${branch}_ccdanodemodules
+    name: openemr-${slug}_ccdanodemodules
   logvolume:
-    name: openemr-${branch}_logs
+    name: openemr-${slug}_logs
   couchdbvolume:
-    name: openemr-${branch}_couchdb
+    name: openemr-${slug}_couchdb
 OVEOF
 
     # mailpit volume only in non-light envs
-    if [[ "$env" != "easy-light" ]]; then
-        cat >> "$override_file" <<OVEOF
+    if [[ "${env}" != "easy-light" ]]; then
+        cat >> "${override_file}" <<OVEOF
   mailpitvolume:
-    name: openemr-${branch}_mailpit
+    name: openemr-${slug}_mailpit
 OVEOF
     fi
 
@@ -197,7 +208,7 @@ OVEOF
     # Ports are handled via WT_* variables with defaults in the base compose.
     # Override only needs: library bind-mount absolute paths (relative paths in
     # base compose break when compose file is symlinked into a worktree directory).
-    cat >> "$override_file" <<OVEOF
+    cat >> "${override_file}" <<OVEOF
 
 services:
   mysql:
@@ -208,8 +219,8 @@ services:
 OVEOF
 
     # couchdb library paths — only in easy and easy-redis
-    if [[ "$env" != "easy-light" ]]; then
-        cat >> "$override_file" <<OVEOF
+    if [[ "${env}" != "easy-light" ]]; then
+        cat >> "${override_file}" <<OVEOF
 
   couchdb:
     volumes:
@@ -224,35 +235,35 @@ OVEOF
     # The base compose uses hardcoded container_name which bypasses Docker project
     # namespacing — override with branch-scoped names so multiple worktrees coexist.
     # Also patch relative ./redis/, ./sentinel/, and ./php.ini paths to absolute.
-    if [[ "$env" == "easy-redis" ]]; then
-        cat >> "$override_file" <<OVEOF
+    if [[ "${env}" == "easy-redis" ]]; then
+        cat >> "${override_file}" <<OVEOF
 
   openemr:
     volumes:
       - ${env_root}/php.ini:/usr/local/etc/php/php.ini:ro
 
   redis-master:
-    container_name: openemr-${branch}-redis-master
+    container_name: openemr-${slug}-redis-master
     volumes:
       - ${env_root}/redis/redis.conf:/etc/redis/redis.conf
 
   redis-replica-1:
-    container_name: openemr-${branch}-redis-replica-1
+    container_name: openemr-${slug}-redis-replica-1
     volumes:
       - ${env_root}/redis/redis.conf:/etc/redis/redis.conf
 
   redis-replica-2:
-    container_name: openemr-${branch}-redis-replica-2
+    container_name: openemr-${slug}-redis-replica-2
     volumes:
       - ${env_root}/redis/redis.conf:/etc/redis/redis.conf
 
   sentinel-1:
-    container_name: openemr-${branch}-sentinel-1
+    container_name: openemr-${slug}-sentinel-1
     volumes:
       - ${env_root}/sentinel/sentinel-1.conf:/etc/redis/sentinel.conf
 
   sentinel-2:
-    container_name: openemr-${branch}-sentinel-2
+    container_name: openemr-${slug}-sentinel-2
     volumes:
       - ${env_root}/sentinel/sentinel-2.conf:/etc/redis/sentinel.conf
 OVEOF
@@ -263,15 +274,18 @@ OVEOF
 wt_compose_cmd() {
     local branch=$1
     local dir env compose_subdir
-    dir=$(wt_state_get "$branch" dir)
-    env=$(wt_state_get "$branch" env)
-    [[ -n "$dir" ]] || wt_die "No worktree found for branch '$branch'"
-    compose_subdir=$(wt_compose_subdir "$env")
+    dir=$(wt_state_get "${branch}" dir)
+    env=$(wt_state_get "${branch}" env)
+    if ! [[ -n "${dir}" ]]; then wt_die "No worktree found for branch '${branch}'"; fi
+    compose_subdir=$(wt_compose_subdir "${env}")
     check_docker_compose_install
+    local slug
+    slug=$(wt_slug "${branch}")
     "${DOCKER_COMPOSE_CMD[@]}" \
-        -p "openemr-$branch" \
-        -f "$OPENEMR_ROOT/$compose_subdir/docker-compose.yml" \
-        -f "$dir/$compose_subdir/docker-compose.override.yml" \
+        --env-file "${dir}/${compose_subdir}/.env" \
+        -p "openemr-${slug}" \
+        -f "${OPENEMR_ROOT}/${compose_subdir}/docker-compose.yml" \
+        -f "${dir}/${compose_subdir}/docker-compose.override.yml" \
         "${@:2}"
 }
 
@@ -280,70 +294,71 @@ wt_compose_cmd() {
 # ============================================================================
 
 cmd_worktree_add() {
-    local branch="" env="$DEFAULT_ENV" start=false new_branch=false
+    local branch="" env="${DEFAULT_ENV}" start=false new_branch=false
 
     while [[ $# -gt 0 ]]; do
         case $1 in
-            --env)           [[ -n "${2:-}" ]] || wt_die "--env requires a value"; env=$2; shift 2 ;;
+            --env)           if [[ -z "${2:-}" ]]; then wt_die "--env requires a value"; fi; env=$2; shift 2 ;;
             --start)         start=true; shift ;;
             -b|--new-branch) new_branch=true; shift ;;
             -*)              wt_die "Unknown option: $1" ;;
-            *)               [[ -z "$branch" ]] && branch=$1 || wt_die "Unexpected argument: $1"; shift ;;
+            *)               if [[ -z "${branch}" ]]; then branch=$1; else wt_die "Unexpected argument: $1"; fi; shift ;;
         esac
     done
-    [[ -n "$branch" ]] || wt_die "Usage: openemr-cmd worktree add <branch> [-b] [--env easy|easy-light|easy-redis] [--start]"
+    if ! [[ -n "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree add <branch> [-b] [--env easy|easy-light|easy-redis] [--start]"; fi
 
     wt_require_cmd git docker jq realpath
-    wt_validate_env "$env"
+    wt_validate_env "${env}"
     wt_init_state
 
     local existing
-    existing=$(wt_state_get "$branch" dir || true)
-    [[ -z "$existing" ]] || wt_die "Worktree for '$branch' already exists at $existing"
+    existing=$(wt_state_get "${branch}" dir || true)
+    if ! [[ -z "${existing}" ]]; then wt_die "Worktree for '${branch}' already exists at ${existing}"; fi
 
     local compose_subdir
-    compose_subdir=$(wt_compose_subdir "$env")
-    [[ -d "$OPENEMR_ROOT/$compose_subdir" ]] || \
-        wt_die "Compose directory not found: $OPENEMR_ROOT/$compose_subdir"
+    compose_subdir=$(wt_compose_subdir "${env}")
+    if [[ ! -d "${OPENEMR_ROOT}/${compose_subdir}" ]]; then
+        wt_die "Compose directory not found: ${OPENEMR_ROOT}/${compose_subdir}"
+    fi
 
     local offset dir
     offset=$(wt_next_offset)
-    dir="$WORKTREE_PARENT/openemr-wt-$branch"
+    dir="${WORKTREE_PARENT}/openemr-wt-${branch}"
 
-    wt_info "Creating git worktree for '$branch' at $dir"
-    if $new_branch; then
-        git -C "$OPENEMR_ROOT" worktree add -b "$branch" "$dir"
+    wt_info "Creating git worktree for '${branch}' at ${dir}"
+    if ${new_branch}; then
+        git -C "${OPENEMR_ROOT}" worktree add -b "${branch}" "${dir}"
     else
-        git -C "$OPENEMR_ROOT" worktree add "$dir" "$branch"
+        git -C "${OPENEMR_ROOT}" worktree add "${dir}" "${branch}"
     fi
 
-    wt_info "Setting up compose files (env=$env, offset=$offset)"
-    mkdir -p "$dir/$compose_subdir"
+    wt_info "Setting up compose files (env=${env}, offset=${offset})"
+    mkdir -p "${dir}/${compose_subdir}"
 
-    wt_write_env      "$dir" "$branch" "$offset" "$env"
-    wt_write_override "$dir" "$branch" "$offset" "$env"
+    wt_write_env      "${dir}" "${branch}" "${offset}" "${env}"
+    wt_write_override "${dir}" "${branch}" "${offset}" "${env}"
 
-    wt_state_set "$branch" "$offset" "$dir" "$env"
+    wt_state_set "${branch}" "${offset}" "${dir}" "${env}"
 
     echo ""
-    echo "Worktree '$branch' ready  [env: $env]"
-    echo "  Directory : $dir"
-    echo "  OpenEMR   : https://localhost:$((9300 + offset))  (http: $((8300 + offset)))"
-    echo "  phpMyAdmin: http://localhost:$((8310 + offset))"
-    if [[ "$env" != "easy-light" ]]; then
-        echo "  Mailpit   : http://localhost:$((8025 + offset))"
-        echo "  CouchDB   : http://localhost:$((5984 + offset))"
+    echo "Worktree '${branch}' ready  [env: ${env}]"
+    echo "  Directory : ${dir}"
+    echo "  OpenEMR   : https://localhost:$((9300 + ${offset}))  (http: $((8300 + ${offset})))"
+    echo "  phpMyAdmin: http://localhost:$((8310 + ${offset}))"
+    if [[ "${env}" != "easy-light" ]]; then
+        echo "  Mailpit   : http://localhost:$((8025 + ${offset}))"
+        echo "  CouchDB   : http://localhost:$((5984 + ${offset}))"
     fi
-    if [[ "$env" == "easy-redis" ]]; then
-        echo "  Redis     : localhost:$((6379 + offset))"
+    if [[ "${env}" == "easy-redis" ]]; then
+        echo "  Redis     : localhost:$((6379 + ${offset}))"
     fi
-    echo "  MySQL     : localhost:$((8320 + offset))"
+    echo "  MySQL     : localhost:$((8320 + ${offset}))"
     echo ""
 
-    if $start; then
-        cmd_worktree_up "$branch"
+    if ${start}; then
+        cmd_worktree_up "${branch}"
     else
-        echo "Run 'openemr-cmd worktree up $branch' to start."
+        echo "Run 'openemr-cmd worktree up ${branch}' to start."
     fi
 }
 
@@ -354,53 +369,53 @@ cmd_worktree_remove() {
         case $1 in
             --purge) purge=true; shift ;;
             -*)      wt_die "Unknown option: $1" ;;
-            *)       [[ -z "$branch" ]] && branch=$1 || wt_die "Unexpected argument: $1"; shift ;;
+            *)       if [[ -z "${branch}" ]]; then branch=$1; else wt_die "Unexpected argument: $1"; fi; shift ;;
         esac
     done
-    [[ -n "$branch" ]] || wt_die "Usage: openemr-cmd worktree remove <branch> [--purge]"
+    if ! [[ -n "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree remove <branch> [--purge]"; fi
 
-    [[ -f "$WT_STATE_FILE" ]] || wt_die "No worktrees found (state file missing)"
+    if ! [[ -f "${WT_STATE_FILE}" ]]; then wt_die "No worktrees found (state file missing)"; fi
     local dir
-    dir=$(wt_state_get "$branch" dir)
-    [[ -n "$dir" ]] || wt_die "No worktree found for branch '$branch'"
+    dir=$(wt_state_get "${branch}" dir)
+    if ! [[ -n "${dir}" ]]; then wt_die "No worktree found for branch '${branch}'"; fi
 
-    echo "This will remove worktree '$branch' at $dir."
-    $purge && echo "  --purge: Docker volumes will also be deleted."
+    echo "This will remove worktree '${branch}' at ${dir}."
+    ${purge} && echo "  --purge: Docker volumes will also be deleted."
     read -rp "Continue? [y/N] " confirm
-    [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+    [[ "${confirm}" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
 
     wt_info "Stopping Docker stack"
-    if $purge; then
-        wt_compose_cmd "$branch" down --volumes 2>/dev/null || true
+    if ${purge}; then
+        wt_compose_cmd "${branch}" down --volumes 2>/dev/null || true
     else
-        wt_compose_cmd "$branch" down 2>/dev/null || true
+        wt_compose_cmd "${branch}" down 2>/dev/null || true
     fi
 
     wt_info "Removing git worktree"
-    git -C "$OPENEMR_ROOT" worktree remove --force "$dir" 2>/dev/null || rm -rf "$dir"
-    git -C "$OPENEMR_ROOT" worktree prune
+    git -C "${OPENEMR_ROOT}" worktree remove --force "${dir}" 2>/dev/null || rm -rf "${dir}"
+    git -C "${OPENEMR_ROOT}" worktree prune
 
-    wt_state_remove "$branch"
-    wt_info "Done. Worktree '$branch' removed."
+    wt_state_remove "${branch}"
+    wt_info "Done. Worktree '${branch}' removed."
 }
 
 cmd_worktree_up() {
     local branch=${1:-}
-    [[ -n "$branch" ]] || wt_die "Usage: openemr-cmd worktree up <branch>"
-    [[ -f "$WT_STATE_FILE" ]] || wt_die "No worktrees found"
-    wt_info "Starting stack for '$branch'"
-    wt_compose_cmd "$branch" up -d
+    if ! [[ -n "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree up <branch>"; fi
+    if ! [[ -f "${WT_STATE_FILE}" ]]; then wt_die "No worktrees found"; fi
+    wt_info "Starting stack for '${branch}'"
+    wt_compose_cmd "${branch}" up -d
     local offset
-    offset=$(wt_state_get "$branch" offset)
-    echo "OpenEMR running at http://localhost:$((8300 + offset))"
+    offset=$(wt_state_get "${branch}" offset)
+    echo "OpenEMR running at http://localhost:$((8300 + ${offset}))"
 }
 
 cmd_worktree_down() {
     local branch=${1:-}
-    [[ -n "$branch" ]] || wt_die "Usage: openemr-cmd worktree down <branch>"
-    [[ -f "$WT_STATE_FILE" ]] || wt_die "No worktrees found"
-    wt_info "Stopping stack for '$branch'"
-    wt_compose_cmd "$branch" down
+    if ! [[ -n "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree down <branch>"; fi
+    if ! [[ -f "${WT_STATE_FILE}" ]]; then wt_die "No worktrees found"; fi
+    wt_info "Stopping stack for '${branch}'"
+    wt_compose_cmd "${branch}" down
 }
 
 cmd_worktree_list() {
@@ -408,13 +423,13 @@ cmd_worktree_list() {
     wt_init_state
 
     local main_branch
-    main_branch=$(git -C "$OPENEMR_ROOT" symbolic-ref --short HEAD 2>/dev/null || echo "detached")
+    main_branch=$(git -C "${OPENEMR_ROOT}" symbolic-ref --short HEAD 2>/dev/null || echo "detached")
 
     printf "%-30s %-12s %-8s %-10s %s\n" "BRANCH" "ENV" "OFFSET" "STATUS" "DIRECTORY"
     printf "%-30s %-12s %-8s %-10s %s\n" "------" "---" "------" "------" "---------"
-    printf "%-30s %-12s %-8s %-10s %s\n" "$main_branch (main)" "-" "-" "-" "$OPENEMR_ROOT"
+    printf "%-30s %-12s %-8s %-10s %s\n" "${main_branch} (main)" "-" "-" "-" "${OPENEMR_ROOT}"
 
-    if [[ ! -f "$WT_STATE_FILE" ]] || [[ "$(cat "$WT_STATE_FILE")" == "{}" ]]; then
+    if [[ ! -f "${WT_STATE_FILE}" ]] || [[ "$(cat "${WT_STATE_FILE}")" == "{}" ]]; then
         echo "(no worktrees)"
         return
     fi
@@ -423,35 +438,41 @@ cmd_worktree_list() {
         local status="stopped"
         check_docker_compose_install
         local compose_subdir
-        compose_subdir=$(wt_compose_subdir "$env")
-        if "${DOCKER_COMPOSE_CMD[@]}" -p "openemr-$branch" \
-            -f "$OPENEMR_ROOT/$compose_subdir/docker-compose.yml" \
-            -f "$dir/$compose_subdir/docker-compose.override.yml" \
+        compose_subdir=$(wt_compose_subdir "${env}")
+        local slug
+        slug=$(wt_slug "${branch}")
+        if "${DOCKER_COMPOSE_CMD[@]}" \
+            --env-file "${dir}/${compose_subdir}/.env" \
+            -p "openemr-${slug}" \
+            -f "${OPENEMR_ROOT}/${compose_subdir}/docker-compose.yml" \
+            -f "${dir}/${compose_subdir}/docker-compose.override.yml" \
             ps --services --filter "status=running" 2>/dev/null | grep -q openemr; then
             status="running"
         fi
-        printf "%-30s %-12s %-8s %-10s %s\n" "$branch" "$env" "$offset" "$status" "$dir"
-    done < <(jq -r 'to_entries[] | [.key, (.value.offset|tostring), .value.dir, .value.env] | @tsv' "$WT_STATE_FILE")
+        printf "%-30s %-12s %-8s %-10s %s\n" "${branch}" "${env}" "${offset}" "${status}" "${dir}"
+    done < <(jq -r 'to_entries[] | [.key, (.value.offset|tostring), .value.dir, .value.env] | @tsv' "${WT_STATE_FILE}")
 }
 
 cmd_worktree_regen() {
     local branch=${1:-}
-    [[ -n "$branch" ]] || wt_die "Usage: openemr-cmd worktree regen <branch>"
-    [[ -f "$WT_STATE_FILE" ]] || wt_die "No worktrees found"
+    if ! [[ -n "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree regen <branch>"; fi
+    if ! [[ -f "${WT_STATE_FILE}" ]]; then wt_die "No worktrees found"; fi
     local offset dir env
-    offset=$(wt_state_get "$branch" offset)
-    dir=$(wt_state_get "$branch" dir)
-    env=$(wt_state_get "$branch" env)
-    [[ -n "$offset" && -n "$dir" && -n "$env" ]] || wt_die "No worktree found for '$branch'"
-    wt_info "Regenerating compose files for '$branch' (env=$env)"
-    wt_write_env      "$dir" "$branch" "$offset" "$env"
-    wt_write_override "$dir" "$branch" "$offset" "$env"
+    offset=$(wt_state_get "${branch}" offset)
+    dir=$(wt_state_get "${branch}" dir)
+    env=$(wt_state_get "${branch}" env)
+    if [[ -z "${offset}" || -z "${dir}" || -z "${env}" ]]; then
+        wt_die "No worktree found for '${branch}'"
+    fi
+    wt_info "Regenerating compose files for '${branch}' (env=${env})"
+    wt_write_env      "${dir}" "${branch}" "${offset}" "${env}"
+    wt_write_override "${dir}" "${branch}" "${offset}" "${env}"
     wt_info "Done."
 }
 
 cmd_worktree() {
     local action=${1:-}
-    case "$action" in
+    case "${action}" in
         add)    cmd_worktree_add    "${@:2}" ;;
         remove) cmd_worktree_remove "${@:2}" ;;
         up)     cmd_worktree_up     "${@:2}" ;;
@@ -921,11 +942,13 @@ elif [[ "${FIRST_ARG}" = '--version' || "${FIRST_ARG}" = '-v' ]]; then
     exit "${VERSION_EXIT_CODE}"
 fi
 
-# ============================================================================
-# CONTAINER DETECTION
-# ============================================================================
+# Specify the docker id/name to execute the commands.
+# Default to insane dev docker, if exists, otherwise easy dev docker,
+# then fall back to any running worktree container.
+# Try to find the insane dev docker ID directly
 if insane_id=$(docker ps --filter "name=${INSANE_DEV_DOCKER}" --format "{{.ID}}" | head -n 1); [[ -n "${insane_id}" ]]; then
     CONTAINER_ID="${insane_id}"
+    # Try to find the easy dev docker ID directly
 elif easy_id=$(docker ps --filter "name=${EASY_DEV_DOCKER}" --format "{{.ID}}" | head -n 1); [[ -n "${easy_id}" ]]; then
     CONTAINER_ID="${easy_id}"
 else
@@ -943,6 +966,8 @@ else
     fi
 fi
 
+# override the default container setting if supplied via the -d parameter
+#  (also removing no longer needed parameters via shift)
 CHANGE_CONTAINER_CODE=25
 if [[ "${FIRST_ARG}" = '-d' ]]; then
     if (( $# < 3 )); then
@@ -957,19 +982,25 @@ else
     shift
 fi
 
-# Collect couchdb container — handles both standard and worktree-style names
+# Collect couchdb container — scoped to the same compose project as CONTAINER_ID
 couchdb_id=$(docker ps --filter "name=${COUCHDB_DOCKER}" --format "{{.ID}}" | head -n 1)
-if [[ -z "${couchdb_id:-}" ]]; then
-    couchdb_id=$(docker ps --format "{{.Names}}\t{{.ID}}" \
-        | grep -E 'couchdb' | head -n 1 | awk '{print $2}' || true)
+if [[ -z "${couchdb_id:-}" && -n "${CONTAINER_ID:-}" ]]; then
+    compose_project=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "${CONTAINER_ID}" 2>/dev/null || true)
+    if [[ -n "${compose_project:-}" && "${compose_project}" != "<no value>" ]]; then
+        couchdb_id=$(docker ps --filter "label=com.docker.compose.project=${compose_project}" \
+            --filter "label=com.docker.compose.service=couchdb" --format "{{.ID}}" | head -n 1 || true)
+    fi
 fi
 COUCHDB_CONTAINER="${couchdb_id:-}"
 
-# Collect mariadb container — handles both standard and worktree-style names
+# Collect mariadb container — scoped to the same compose project as CONTAINER_ID
 mariadb_id=$(docker ps --filter "name=${MARIADB_DOCKER}" --format "{{.ID}}" | head -n 1)
-if [[ -z "${mariadb_id:-}" ]]; then
-    mariadb_id=$(docker ps --format "{{.Names}}\t{{.ID}}" \
-        | grep -E '\-mysql-' | head -n 1 | awk '{print $2}' || true)
+if [[ -z "${mariadb_id:-}" && -n "${CONTAINER_ID:-}" ]]; then
+    compose_project=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "${CONTAINER_ID}" 2>/dev/null || true)
+    if [[ -n "${compose_project:-}" && "${compose_project}" != "<no value>" ]]; then
+        mariadb_id=$(docker ps --filter "label=com.docker.compose.project=${compose_project}" \
+            --filter "label=com.docker.compose.service=mysql" --format "{{.ID}}" | head -n 1 || true)
+    fi
 fi
 MARIADB_CONTAINER_ID="${mariadb_id:-}"
 
@@ -986,9 +1017,8 @@ case "${FIRST_ARG}" in
         ;;
 esac
 
-# ============================================================================
-# COMMAND DISPATCH
-# ============================================================================
+# See how we were called.
+# For the shift usage, it used to cover the insane env.
 case "${FIRST_ARG}" in
     up)
         run_docker_compose up -d
