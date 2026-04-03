@@ -213,9 +213,9 @@ OVEOF
 services:
   mysql:
     volumes:
-      - ${lib_root}/sql-ssl-certs-keys/easy/ca.pem:/etc/ssl/ca.pem:ro
-      - ${lib_root}/sql-ssl-certs-keys/easy/server-cert.pem:/etc/ssl/server-cert.pem:ro
-      - ${lib_root}/sql-ssl-certs-keys/easy/server-key.pem:/etc/ssl/server-key.pem:ro
+      - "${lib_root}/sql-ssl-certs-keys/easy/ca.pem:/etc/ssl/ca.pem:ro"
+      - "${lib_root}/sql-ssl-certs-keys/easy/server-cert.pem:/etc/ssl/server-cert.pem:ro"
+      - "${lib_root}/sql-ssl-certs-keys/easy/server-key.pem:/etc/ssl/server-key.pem:ro"
 OVEOF
 
     # couchdb library paths — only in easy and easy-redis
@@ -224,10 +224,10 @@ OVEOF
 
   couchdb:
     volumes:
-      - ${lib_root}/couchdb-config-ssl-cert-keys/local.ini:/opt/couchdb/etc/local.ini:rw
-      - ${lib_root}/couchdb-config-ssl-cert-keys/easy/ca.pem:/etc/ssl/ca.pem:ro
-      - ${lib_root}/couchdb-config-ssl-cert-keys/easy/server-cert.pem:/etc/ssl/server-cert.pem:ro
-      - ${lib_root}/couchdb-config-ssl-cert-keys/easy/server-key.pem:/etc/ssl/server-key.pem:ro
+      - "${lib_root}/couchdb-config-ssl-cert-keys/local.ini:/opt/couchdb/etc/local.ini:rw"
+      - "${lib_root}/couchdb-config-ssl-cert-keys/easy/ca.pem:/etc/ssl/ca.pem:ro"
+      - "${lib_root}/couchdb-config-ssl-cert-keys/easy/server-cert.pem:/etc/ssl/server-cert.pem:ro"
+      - "${lib_root}/couchdb-config-ssl-cert-keys/easy/server-key.pem:/etc/ssl/server-key.pem:ro"
 OVEOF
     fi
 
@@ -240,32 +240,32 @@ OVEOF
 
   openemr:
     volumes:
-      - ${env_root}/php.ini:/usr/local/etc/php/php.ini:ro
+      - "${env_root}/php.ini:/usr/local/etc/php/php.ini:ro"
 
   redis-master:
     container_name: openemr-${slug}-redis-master
     volumes:
-      - ${env_root}/redis/redis.conf:/etc/redis/redis.conf
+      - "${env_root}/redis/redis.conf:/etc/redis/redis.conf"
 
   redis-replica-1:
     container_name: openemr-${slug}-redis-replica-1
     volumes:
-      - ${env_root}/redis/redis.conf:/etc/redis/redis.conf
+      - "${env_root}/redis/redis.conf:/etc/redis/redis.conf"
 
   redis-replica-2:
     container_name: openemr-${slug}-redis-replica-2
     volumes:
-      - ${env_root}/redis/redis.conf:/etc/redis/redis.conf
+      - "${env_root}/redis/redis.conf:/etc/redis/redis.conf"
 
   sentinel-1:
     container_name: openemr-${slug}-sentinel-1
     volumes:
-      - ${env_root}/sentinel/sentinel-1.conf:/etc/redis/sentinel.conf
+      - "${env_root}/sentinel/sentinel-1.conf:/etc/redis/sentinel.conf"
 
   sentinel-2:
     container_name: openemr-${slug}-sentinel-2
     volumes:
-      - ${env_root}/sentinel/sentinel-2.conf:/etc/redis/sentinel.conf
+      - "${env_root}/sentinel/sentinel-2.conf:/etc/redis/sentinel.conf"
 OVEOF
     fi
 }
@@ -510,13 +510,14 @@ cmd_worktree() {
         *)
             echo "Usage: openemr-cmd worktree <add|remove|up|down|list|regen> [options]"
             echo ""
-            echo "  add <branch> [--env easy|easy-light|easy-redis] [--start]"
-            echo "                            Create worktree (default env: easy)"
+            echo "  add <branch> [-b] [--env easy|easy-light|easy-redis] [--start]"
+            echo "                            Create worktree (-b creates new branch, default env: easy)"
             echo "  remove <branch> [--keep-volumes] Remove worktree (volumes deleted by default)"
             echo "  up <branch>               Start Docker stack for worktree"
             echo "  down <branch> [--keep-volumes]  Stop Docker stack for worktree (volumes deleted by default)"
             echo "  list                      List all worktrees and status"
             echo "  regen <branch>            Regenerate override/env files"
+            echo "  wt                        Alias for worktree"
             exit 1
             ;;
     esac
@@ -905,7 +906,7 @@ if [[ $# -eq 0 || "${FIRST_ARG}" = '--help' || "${FIRST_ARG}" = '-h' ]]; then
     echo 'Commands:'
     echo 'worktree-management:'
     echo "  worktree add <branch> [-b] [--env easy|easy-light|easy-redis] [--start]"
-    echo "                                     Create a new worktree for branch (default env: easy)"
+    echo "                                     Create worktree (-b creates new branch, default env: easy)"
     echo "  worktree remove <branch> [--keep-volumes] Remove worktree (volumes deleted by default)"
     echo "  worktree up <branch>               Start Docker stack for a worktree"
     echo "  worktree down <branch> [--keep-volumes]  Stop Docker stack (volumes deleted by default)"
