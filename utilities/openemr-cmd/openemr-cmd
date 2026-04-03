@@ -495,8 +495,7 @@ cmd_worktree() {
 }
 
 # ============================================================================
-# ============================================================================
-# ORIGINAL openemr-cmd FUNCTIONS (unchanged)
+# END OF WORKTREE STATE MANAGEMENT
 # ============================================================================
 
 # If the docker is snap or non-snap docker
@@ -988,8 +987,7 @@ elif [[ "${FIRST_ARG}" = '--version' || "${FIRST_ARG}" = '-v' ]]; then
 fi
 
 # Specify the docker id/name to execute the commands.
-# Default to insane dev docker, if exists, otherwise easy dev docker,
-# then fall back to any running worktree container.
+# Default to insane dev docker, if exists, otherwise easy dev docker.
 # Try to find the insane dev docker ID directly
 if insane_id=$(docker ps --filter "name=${INSANE_DEV_DOCKER}" --format "{{.ID}}" | head -n 1); [[ -n "${insane_id}" ]]; then
     CONTAINER_ID="${insane_id}"
@@ -1007,6 +1005,8 @@ else
         worktree_name=$(docker ps --filter "id=${worktree_id}" --format "{{.Names}}")
         echo "Note: Targeting worktree container '${worktree_name}'. Use -d to specify a different container." >&2
     else
+        # Container not found running, set CONTAINER_ID to empty.
+        # The script's later logic handles the -d flag or errors if no container is specified.
         CONTAINER_ID=""
     fi
 fi
@@ -1036,7 +1036,7 @@ if [[ -z "${couchdb_id:-}" && -n "${CONTAINER_ID:-}" ]]; then
             --filter "label=com.docker.compose.service=couchdb" --format "{{.ID}}" | head -n 1 || true)
     fi
 fi
-COUCHDB_CONTAINER="${couchdb_id:-}"
+COUCHDB_CONTAINER="${couchdb_id:-}" # Set to empty if not found
 
 # Collect mariadb container — scoped to the same compose project as CONTAINER_ID
 mariadb_id=$(docker ps --filter "name=${MARIADB_DOCKER}" --format "{{.ID}}" | head -n 1)
@@ -1047,7 +1047,7 @@ if [[ -z "${mariadb_id:-}" && -n "${CONTAINER_ID:-}" ]]; then
             --filter "label=com.docker.compose.service=mysql" --format "{{.ID}}" | head -n 1 || true)
     fi
 fi
-MARIADB_CONTAINER_ID="${mariadb_id:-}"
+MARIADB_CONTAINER_ID="${mariadb_id:-}" # Set to empty if not found
 
 # Check if a target container ID was determined or provided before proceeding with commands that need it
 # (Allow proceeding if the command doesn't require a container, like up, down, start, stop, --help, --version)
