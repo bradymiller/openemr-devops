@@ -131,28 +131,28 @@ WT_NAME=${branch}
 WT_ENV=${env}
 WT_OFFSET=${offset}
 OPENEMR_DIR=${dir}
-WT_HTTP_PORT=$((8300 + ${offset}))
-WT_HTTPS_PORT=$((9300 + ${offset}))
-WT_MYSQL_PORT=$((8320 + ${offset}))
-WT_PMA_PORT=$((8310 + ${offset}))
+WT_HTTP_PORT=$((8300 + $offset))
+WT_HTTPS_PORT=$((9300 + $offset))
+WT_MYSQL_PORT=$((8320 + $offset))
+WT_PMA_PORT=$((8310 + $offset))
 ENVEOF
 
     # Services only in easy and easy-redis (not light)
     if [[ "${env}" != "easy-light" ]]; then
         cat >> "${dir}/${compose_subdir}/.env" <<ENVEOF
-WT_SELENIUM_PORT=$((4444 + ${offset}))
-WT_VNC_PORT=$((7900 + ${offset}))
-WT_COUCHDB_PORT=$((5984 + ${offset}))
-WT_COUCHDB_SSL_PORT=$((6984 + ${offset}))
-WT_MAILPIT_UI_PORT=$((8025 + ${offset}))
-WT_MAILPIT_SMTP_PORT=$((1025 + ${offset}))
+WT_SELENIUM_PORT=$((4444 + $offset))
+WT_VNC_PORT=$((7900 + $offset))
+WT_COUCHDB_PORT=$((5984 + $offset))
+WT_COUCHDB_SSL_PORT=$((6984 + $offset))
+WT_MAILPIT_UI_PORT=$((8025 + $offset))
+WT_MAILPIT_SMTP_PORT=$((1025 + $offset))
 ENVEOF
     fi
 
     # Redis only in easy-redis
     if [[ "${env}" == "easy-redis" ]]; then
         cat >> "${dir}/${compose_subdir}/.env" <<ENVEOF
-WT_REDIS_PORT=$((6379 + ${offset}))
+WT_REDIS_PORT=$((6379 + $offset))
 ENVEOF
     fi
 }
@@ -495,9 +495,12 @@ cmd_worktree() {
 }
 
 # ============================================================================
+# ============================================================================
 # ORIGINAL openemr-cmd FUNCTIONS (unchanged)
 # ============================================================================
 
+# If the docker is snap or non-snap docker
+# Setting the container names accordingly
 get_container_names() {
     INSANE_DEV_DOCKER="openemr-8-4[_\-]1"
     EASY_DEV_DOCKER="openemr[_\-]1"
@@ -505,44 +508,61 @@ get_container_names() {
     MARIADB_DOCKER="mysql[_\-]1"
 }
 
+# Set the container names
 get_container_names
 
+# Initialize ENV_VAR
 ENV_VAR=' '
 
+# Function to run the devtools script inside the specified container
+# Usage: run_devtools_in_docker <container_id> <devtools_command> [args...]
 run_devtools_in_docker() {
     local container_id="$1"
-    shift
+    shift # Remove container_id from arguments
+    # DEV_TOOLS is '/root/devtools'
+    # "$@" passes the remaining arguments (devtools command and its args) correctly quoted
     docker exec -e "${ENV_VAR}" -i "${container_id}" "${DEV_TOOLS}" "$@"
 }
 
+# Function to run an arbitrary shell command string inside the specified container
+# Usage: run_shell_command_in_docker <container_id> <command_string>
 run_shell_command_in_docker() {
     local container_id="$1"
     local command_string="$2"
     docker exec -i "${container_id}" sh -c "${command_string}"
 }
 
-FIRST_ARG="${1:-}"
+# Set some constants
+FIRST_ARG="${1:-}" # define the first parameter, default to empty if not set
 DEV_TOOLS='/root/devtools'
 
 check_docker_compose_install(){
     local DOCKER_COMPOSE_CODE=22
+    # Using an array due to variable expansion for the resulting command
+    # Check for 'docker compose' (plugin syntax) first
     if docker compose &>/dev/null; then
         DOCKER_COMPOSE_CMD=(docker compose)
+        # If plugin not found, check for 'docker-compose' (standalone)
     elif command -v docker-compose &>/dev/null; then
         DOCKER_COMPOSE_CMD=(docker-compose)
     else
+        # Neither found, error out.
         echo "Error: Neither 'docker compose' (plugin) nor 'docker-compose' (standalone) found." >&2
         echo "Please ensure Docker Compose is installed correctly." >&2
         exit "${DOCKER_COMPOSE_CODE}"
     fi
 }
 
+# Function to run the determined docker compose command
+# Usage: run_docker_compose <compose_args...>
 run_docker_compose() {
     check_docker_compose_install
+    # Ensure the command has been determined
     if [[ "${#DOCKER_COMPOSE_CMD[@]}" -eq 0 ]]; then
         echo "Error: Docker Compose command not determined." >&2
         exit 1
     fi
+    # Execute the stored command with provided arguments
     "${DOCKER_COMPOSE_CMD[@]}" "$@"
 }
 
@@ -560,6 +580,7 @@ execute_command_flexible(){
         echo "e.g. ${0##*/} [exec|e] \"tail -f /var/log/apache2/error.log\""
         echo "e.g. ${0##*/} -d docker_openemr-7-3-redis-312_1 [exec|e] \"tail -f /var/log/apache2/error.log\""
     else
+        # Use the function for arbitrary commands
         run_shell_command_in_docker "${CONTAINER_ID}" "$@"
     fi
 }
@@ -570,23 +591,30 @@ check_docker_log() {
 
 check_docker_names() {
     if [[ $# -eq 1 ]]; then
+        # ARGS: couchdb php fhir mariadb mysql nginx openemr openldap orthanc redis.
+        # specify the name to check
         local CHECK_NAME="$1"
         echo '===Check the single Docker Name==='
         echo '  STATUS        NAME'
+        # Capture output, check if empty
         local matching_container
-        matching_container=$(docker ps -a --format "{{.Status}}\t{{.Names}}"| grep "${CHECK_NAME}" || true)
+        matching_container=$(docker ps -a --format "{{.Status}}\t{{.Names}}"| grep "${CHECK_NAME}" || true) # Keep || true here, and below, to prevent exit during capture
         if [[ -z "${matching_container}" ]]; then
             echo "No containers found matching '${CHECK_NAME}'"
         else
             echo "${matching_container}"
         fi
+
     else
+        # Show all the docker names.
         echo '***************************************************************'
         echo 'Show all the docker names by default.'
         echo 'Please provide the keyword if you want to check the single one.'
         echo "e.g $(basename "$0") [docker-names|dn] php"
         echo '***************************************************************'
         echo '=======Running Docker Names======='
+
+        # Capture output, check if empty
         local running_containers
         running_containers=$(docker ps --format "{{.Status}}\t{{.Names}}" | { grep -v NAMES || true; } | sort -n)
         if [[ -z "${running_containers}" ]]; then
@@ -596,6 +624,7 @@ check_docker_names() {
             echo "${running_containers}"
         fi
         echo '====Other Docker Status Names====='
+        # Capture output, check if empty
         local other_containers
         other_containers=$(docker ps -a --format "{{.Status}}\t{{.Names}}" | grep -v Up || true)
         if [[ -z "${other_containers}" ]]; then
@@ -624,6 +653,7 @@ creat_a_backup_snapshot(){
         echo 'e.g. openemr-cmd [backup-snapshot|bs] example'
         exit "${BACKUP_FILE_CODE}"
     else
+        # Use the devtools function
         run_devtools_in_docker "${CONTAINER_ID}" backup "${BACKUP_FILE}"
     fi
 }
@@ -636,13 +666,14 @@ restore_from_a_snapshot(){
         echo 'e.g. openemr-cmd [restore-snapshot|rs] example'
         exit "${BACKUP_FILE_CODE}"
     else
+        # Use the devtools function
         run_devtools_in_docker "${CONTAINER_ID}" restore "${BACKUP_FILE}"
     fi
 }
 
 copy_capsule_from_docker_to_host(){
     local BACKUP_FILE="$1"
-    local BACKUP_HOST_DIR="${2:-}"
+    local BACKUP_HOST_DIR="${2:-}" #optional parameter, default to empty
     local BACKUP_FILE_CODE=19
     if (( $# != 1 && $# != 2 )); then
         echo 'Please provide the capsule name.'
@@ -660,6 +691,7 @@ copy_capsule_from_docker_to_host(){
 }
 
 copy_capsule_from_host_to_docker(){
+    # Need a capsule parameter
     local BACKUP_FILE="$1"
     local CP_CAP_DIR_DKR_CODE=15
     local BACKUP_FILE_CODE=18
@@ -678,6 +710,7 @@ copy_capsule_from_host_to_docker(){
 }
 
 ensure_current_ver_with_upgrade_ver(){
+    # Need a version parameter
     local UPGRADE_FROM_VERSION="$1"
     local BACKUP_FILE_CODE=22
     if [[ $# != 1 ]]; then
@@ -685,6 +718,7 @@ ensure_current_ver_with_upgrade_ver(){
         echo 'e.g. openemr-cmd [ensure-version|ev] 5.0.2'
         exit "${BACKUP_FILE_CODE}"
     else
+        # Use the devtools function
         run_devtools_in_docker "${CONTAINER_ID}" upgrade "${UPGRADE_FROM_VERSION}"
     fi
 }
@@ -699,6 +733,7 @@ change_db_character_set_and_collation(){
         echo '     openemr-cmd [encoding-collation|ec] utf8 utf8_general_ci'
         exit "${CHARACTER_SET_COLLATION_CODE}"
     else
+        # Use the devtools function, passing both arguments
         run_devtools_in_docker "${CONTAINER_ID}" change-encoding-collation "$1" "$2"
     fi
 }
@@ -711,11 +746,13 @@ setup-client-cert(){
         echo 'e.g. openemr-cmd [scc|setup-client-cert] sll'
         exit "${CERT_PACKAGE_CODE}"
     else
+        # Use the devtools function
         run_devtools_in_docker "${CONTAINER_ID}" setup-client-cert "${CERT_PACKAGE}"
     fi
 }
 
 put-client-cert(){
+    # Need a capsule parameter
     local CERT_PACKAGE_FILE="$1"
     local PUT_CLIENT_CERT_CODE=32
     local CERT_PACKAGE_FILE_CODE=31
@@ -734,32 +771,40 @@ put-client-cert(){
 }
 
 import-random-patients(){
+    # Use the devtools function, passing all arguments ($@)
     ENV_VAR="OPENEMR_ENABLE_CCDA_IMPORT=1"
     run_devtools_in_docker "${CONTAINER_ID}" import-random-patients "$@"
 }
 
 register-oauth2-client-demo(){
+    # Use the devtools function, passing all arguments ($@)
     run_devtools_in_docker "${CONTAINER_ID}" register-oauth2-client-demo "$@"
 }
 
 register-oauth2-client(){
+    # Use the devtools function, passing all arguments ($@)
     run_devtools_in_docker "${CONTAINER_ID}" register-oauth2-client "$@"
 }
 
 set-swagger-to-multisite(){
+    # Use the devtools function, passing all arguments ($@)
     run_devtools_in_docker "${CONTAINER_ID}" set-swagger-to-multisite "$@"
 }
 
 set-webroot(){
     local sed_command
     if (( $# == 1 )); then
+        # assume the openemr parameter was given, so set openemr webroot
         echo "changing webroot to openemr"
         sed_command="sed -i 's@^DocumentRoot /var/www/localhost/htdocs.*@DocumentRoot /var/www/localhost/htdocs@g' /etc/apache2/conf.d/openemr.conf"
     else
+        # set to blank, so set blank webroot
         echo "changing webroot to blank"
         sed_command="sed -i 's@^DocumentRoot /var/www/localhost/htdocs.*@DocumentRoot /var/www/localhost/htdocs/openemr@g' /etc/apache2/conf.d/openemr.conf"
     fi
+    # Use the function for arbitrary commands
     run_shell_command_in_docker "${CONTAINER_ID}" "${sed_command}"
+    # restart the docker
     echo "restarting openemr docker so the apache configuration change will take effect"
     docker restart "${CONTAINER_ID}"
 }
@@ -1004,16 +1049,22 @@ if [[ -z "${mariadb_id:-}" && -n "${CONTAINER_ID:-}" ]]; then
 fi
 MARIADB_CONTAINER_ID="${mariadb_id:-}"
 
+# Check if a target container ID was determined or provided before proceeding with commands that need it
+# (Allow proceeding if the command doesn't require a container, like up, down, start, stop, --help, --version)
 case "${FIRST_ARG}" in
     up|down|start|stop|--help|-h|--version|-v)
+        # These commands don't necessarily need a running container ID determined here
         ;;
     *)
+        # All other commands likely need a CONTAINER_ID
+        # Check if CONTAINER_ID is empty AND -d wasn't the *original* first arg
         if [[ -z "${CONTAINER_ID}" && "${FIRST_ARG}" != '-d' ]]; then
             echo "Error: Could not automatically determine target OpenEMR container (tried '${INSANE_DEV_DOCKER}' and '${EASY_DEV_DOCKER}')." >&2
             echo "Use -d <container_name_or_id> to specify the target container." >&2
             echo "For worktree containers, use: openemr-cmd -d <container_name> COMMAND" >&2
             exit 1
         fi
+        # If -d was used, CONTAINER_ID was set in the parameter parsing block
         ;;
 esac
 
@@ -1245,6 +1296,7 @@ case "${FIRST_ARG}" in
         run_devtools_in_docker "${CONTAINER_ID}" ldap-ssl-client-off
         ;;
     gmb|generate-multisite-bank)
+        # Pass remaining arguments ($@) correctly quoted to the devtools function
         run_devtools_in_docker "${CONTAINER_ID}" generate-multisite-bank "$@"
         ;;
     el)
@@ -1266,6 +1318,7 @@ case "${FIRST_ARG}" in
         run_devtools_in_docker "${CONTAINER_ID}" list-multisites
         ;;
     *)
+        # Default case: assume it's a devtools command
         run_devtools_in_docker "${CONTAINER_ID}" "${FIRST_ARG}" "$@"
         ;;
 esac
