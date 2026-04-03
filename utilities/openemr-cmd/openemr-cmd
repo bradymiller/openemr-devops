@@ -374,12 +374,12 @@ cmd_worktree_remove() {
             *)       if [[ -z "${branch}" ]]; then branch=$1; else wt_die "Unexpected argument: $1"; fi; shift ;;
         esac
     done
-    if ! [[ -n "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree remove <branch> [--purge]"; fi
+    if [[ -z "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree remove <branch> [--purge]"; fi
 
     if ! [[ -f "${WT_STATE_FILE}" ]]; then wt_die "No worktrees found (state file missing)"; fi
     local dir
     dir=$(wt_state_get "${branch}" dir)
-    if ! [[ -n "${dir}" ]]; then wt_die "No worktree found for branch '${branch}'"; fi
+    if [[ -z "${dir}" ]]; then wt_die "No worktree found for branch '${branch}'"; fi
 
     echo "This will remove worktree '${branch}' at ${dir}."
     ${purge} && echo "  --purge: Docker volumes will also be deleted."
@@ -388,9 +388,9 @@ cmd_worktree_remove() {
 
     wt_info "Stopping Docker stack"
     if ${purge}; then
-        wt_compose_cmd "${branch}" down --volumes 2>/dev/null || true
+        wt_compose_cmd "${branch}" down --volumes 2>/dev/null
     else
-        wt_compose_cmd "${branch}" down 2>/dev/null || true
+        wt_compose_cmd "${branch}" down 2>/dev/null
     fi
 
     wt_info "Removing git worktree"
@@ -404,7 +404,7 @@ cmd_worktree_remove() {
 # shellcheck disable=SC2004
 cmd_worktree_up() {
     local branch=${1:-}
-    if ! [[ -n "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree up <branch>"; fi
+    if [[ -z "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree up <branch>"; fi
     if ! [[ -f "${WT_STATE_FILE}" ]]; then wt_die "No worktrees found"; fi
     wt_info "Starting stack for '${branch}'"
     wt_compose_cmd "${branch}" up -d
@@ -415,7 +415,7 @@ cmd_worktree_up() {
 
 cmd_worktree_down() {
     local branch=${1:-}
-    if ! [[ -n "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree down <branch>"; fi
+    if [[ -z "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree down <branch>"; fi
     if ! [[ -f "${WT_STATE_FILE}" ]]; then wt_die "No worktrees found"; fi
     wt_info "Stopping stack for '${branch}'"
     wt_compose_cmd "${branch}" down
@@ -425,40 +425,42 @@ cmd_worktree_list() {
     wt_require_cmd jq
     wt_init_state
 
-    local main_branch
+    local main_branch jq_output status compose_subdir slug ps_output
     main_branch=$(git -C "${OPENEMR_ROOT}" symbolic-ref --short HEAD 2>/dev/null || echo "detached")
 
     printf "%-30s %-12s %-8s %-10s %s\n" "BRANCH" "ENV" "OFFSET" "STATUS" "DIRECTORY"
     printf "%-30s %-12s %-8s %-10s %s\n" "------" "---" "------" "------" "---------"
     printf "%-30s %-12s %-8s %-10s %s\n" "${main_branch} (main)" "-" "-" "-" "${OPENEMR_ROOT}"
 
-    if [[ ! -f "${WT_STATE_FILE}" ]] || [[ "$(cat "${WT_STATE_FILE}")" == "{}" ]]; then
+    local state_content
+    state_content=$(cat "${WT_STATE_FILE}")
+    if [[ ! -f "${WT_STATE_FILE}" ]] || [[ "${state_content}" == "{}" ]]; then
         echo "(no worktrees)"
         return
     fi
 
+    jq_output=$(jq -r 'to_entries[] | [.key, (.value.offset|tostring), .value.dir, .value.env] | @tsv' "${WT_STATE_FILE}")
     while IFS=$'\t' read -r branch offset dir env; do
-        local status="stopped"
+        status="stopped"
         check_docker_compose_install
-        local compose_subdir
         compose_subdir=$(wt_compose_subdir "${env}")
-        local slug
         slug=$(wt_slug "${branch}")
-        if "${DOCKER_COMPOSE_CMD[@]}" \
+        ps_output=$("${DOCKER_COMPOSE_CMD[@]}" \
             --env-file "${dir}/${compose_subdir}/.env" \
             -p "openemr-${slug}" \
             -f "${OPENEMR_ROOT}/${compose_subdir}/docker-compose.yml" \
             -f "${dir}/${compose_subdir}/docker-compose.override.yml" \
-            ps --services --filter "status=running" 2>/dev/null | grep -q openemr; then
+            ps --services --filter "status=running" 2>/dev/null)
+        if echo "${ps_output}" | grep -q openemr; then
             status="running"
         fi
         printf "%-30s %-12s %-8s %-10s %s\n" "${branch}" "${env}" "${offset}" "${status}" "${dir}"
-    done < <(jq -r 'to_entries[] | [.key, (.value.offset|tostring), .value.dir, .value.env] | @tsv' "${WT_STATE_FILE}")
+    done <<< "${jq_output}"
 }
 
 cmd_worktree_regen() {
     local branch=${1:-}
-    if ! [[ -n "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree regen <branch>"; fi
+    if [[ -z "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree regen <branch>"; fi
     if ! [[ -f "${WT_STATE_FILE}" ]]; then wt_die "No worktrees found"; fi
     local offset dir env
     offset=$(wt_state_get "${branch}" offset)
