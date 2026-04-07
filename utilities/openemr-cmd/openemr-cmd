@@ -395,7 +395,16 @@ cmd_worktree_remove() {
     fi
 
     wt_info "Removing git worktree"
-    git -C "${OPENEMR_ROOT}" worktree remove --force "${dir}" 2>/dev/null || rm -rf "${dir}"
+
+    if ! git -C "${OPENEMR_ROOT}" worktree remove --force "${dir}" 2>/dev/null; then
+        # Validate dir before recursive delete — guard against corrupted state file
+        if [[ -z "${dir}" ]] || \
+           [[ "${dir}" != "${WORKTREE_PARENT}/openemr-wt-"* ]] || \
+           [[ "${dir}" == "/" ]]; then
+            wt_die "Refusing to delete '${dir}': path does not match expected worktree location"
+        fi
+        rm -rf "${dir}"
+    fi
     git -C "${OPENEMR_ROOT}" worktree prune
 
     wt_state_remove "${branch}"
