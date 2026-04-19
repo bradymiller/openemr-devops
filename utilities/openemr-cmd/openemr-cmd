@@ -513,10 +513,16 @@ cmd_worktree_list() {
         status="stopped"
         compose_subdir=$(wt_compose_subdir "${env}")
         slug=$(wt_slug "${branch}")
+        # Validate the worktree dir before using it for compose operations.
+        # wt_validate_dir calls wt_die internally, so we cannot call it inside
+        # an if/!/|| condition (shellcheck SC2310/SC2311/SC2312 — set -e is
+        # disabled in those contexts). Instead, temporarily disable set -e so
+        # we can call the function standalone and capture its exit code cleanly.
         local validate_result=0
-        if ! wt_validate_dir "${dir}" 2>/dev/null; then
-            validate_result=1
-        fi
+        set +e
+        wt_validate_dir "${dir}" 2>/dev/null
+        validate_result=$?
+        set -e
         if [[ ! -d "${dir}" ]] || \
            [[ ! -f "${dir}/${compose_subdir}/.env" ]] || \
            [[ ! -f "${dir}/${compose_subdir}/docker-compose.override.yml" ]]; then
