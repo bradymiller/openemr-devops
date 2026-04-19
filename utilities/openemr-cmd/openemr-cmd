@@ -565,11 +565,13 @@ cmd_worktree_list() {
         status="stopped"
         compose_subdir=$(wt_compose_subdir "${env}")
         slug=$(wt_slug "${branch}")
+        local validate_result=0
+        wt_validate_dir_safe "${dir}"; validate_result=$?
         if [[ ! -d "${dir}" ]] || \
            [[ ! -f "${dir}/${compose_subdir}/.env" ]] || \
            [[ ! -f "${dir}/${compose_subdir}/docker-compose.override.yml" ]]; then
             status="missing"
-        elif ! wt_validate_dir_safe "${dir}"; then
+        elif [[ "${validate_result}" -ne 0 ]]; then
             status="invalid"
         else
             ps_output=$("${DOCKER_COMPOSE_CMD[@]}" \
