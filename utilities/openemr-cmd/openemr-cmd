@@ -18,7 +18,7 @@ set -euo pipefail
 #################################################################################################
 
 # Increment the version when modify script
-VERSION="1.0.26"
+VERSION="1.0.27"
 
 # ============================================================================
 # WORKTREE STATE MANAGEMENT
@@ -165,8 +165,8 @@ wt_write_override() {
     compose_subdir=$(wt_compose_subdir "${env}")
 
     local lib_root env_root
-    lib_root=$(realpath "${OPENEMR_ROOT}/docker/library")
-    env_root=$(realpath "${OPENEMR_ROOT}/${compose_subdir}")
+    lib_root=$(realpath "${dir}/docker/library")
+    env_root=$(realpath "${dir}/${compose_subdir}")
 
     local override_file="${dir}/${compose_subdir}/docker-compose.override.yml"
 
@@ -190,6 +190,8 @@ volumes:
     name: openemr-${slug}_vendor
   ccdanodemodules:
     name: openemr-${slug}_ccdanodemodules
+  ccdanodemodules2:
+    name: openemr-${slug}_ccdanodemodules2
   logvolume:
     name: openemr-${slug}_logs
   couchdbvolume:
@@ -234,7 +236,7 @@ OVEOF
     # Redis-specific overrides.
     # The base compose uses hardcoded container_name which bypasses Docker project
     # namespacing — override with branch-scoped names so multiple worktrees coexist.
-    # Also patch relative ./redis/, ./sentinel/, and ./php.ini paths to absolute.
+    # Also patch relative ./php.ini path to absolute.
     if [[ "${env}" == "easy-redis" ]]; then
         cat >> "${override_file}" <<OVEOF
 
@@ -244,28 +246,18 @@ OVEOF
 
   redis-master:
     container_name: openemr-${slug}-redis-master
-    volumes:
-      - "${env_root}/redis/redis.conf:/etc/redis/redis.conf"
 
   redis-replica-1:
     container_name: openemr-${slug}-redis-replica-1
-    volumes:
-      - "${env_root}/redis/redis.conf:/etc/redis/redis.conf"
 
   redis-replica-2:
     container_name: openemr-${slug}-redis-replica-2
-    volumes:
-      - "${env_root}/redis/redis.conf:/etc/redis/redis.conf"
 
   sentinel-1:
     container_name: openemr-${slug}-sentinel-1
-    volumes:
-      - "${env_root}/sentinel/sentinel-1.conf:/etc/redis/sentinel.conf"
 
   sentinel-2:
     container_name: openemr-${slug}-sentinel-2
-    volumes:
-      - "${env_root}/sentinel/sentinel-2.conf:/etc/redis/sentinel.conf"
 OVEOF
     fi
 }
@@ -284,7 +276,7 @@ wt_compose_cmd() {
     "${DOCKER_COMPOSE_CMD[@]}" \
         --env-file "${dir}/${compose_subdir}/.env" \
         -p "openemr-${slug}" \
-        -f "${OPENEMR_ROOT}/${compose_subdir}/docker-compose.yml" \
+        -f "${dir}/${compose_subdir}/docker-compose.yml" \
         -f "${dir}/${compose_subdir}/docker-compose.override.yml" \
         "${@:2}"
 }
@@ -479,7 +471,7 @@ cmd_worktree_list() {
             ps_output=$("${DOCKER_COMPOSE_CMD[@]}" \
                 --env-file "${dir}/${compose_subdir}/.env" \
                 -p "openemr-${slug}" \
-                -f "${OPENEMR_ROOT}/${compose_subdir}/docker-compose.yml" \
+                -f "${dir}/${compose_subdir}/docker-compose.yml" \
                 -f "${dir}/${compose_subdir}/docker-compose.override.yml" \
                 ps --services --filter "status=running" 2>/dev/null) || true
             if echo "${ps_output}" | grep -q openemr; then
