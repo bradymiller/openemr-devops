@@ -116,6 +116,33 @@ wt_slug() {
     echo "$1" | tr '/' '-' | tr -cd 'a-zA-Z0-9_-' | tr '[:upper:]' '[:lower:]'
 }
 
+# Validates that a worktree dir from state is safe to use for compose operations.
+# Guards against corrupted/tampered state by checking:
+#   1. dir resolves to a real path (realpath -e)
+#   2. it is within WORKTREE_PARENT
+#   3. it is a known git worktree of OPENEMR_ROOT
+wt_validate_dir() {
+    local dir=$1
+    local dir_real worktree_parent_real
+
+    # 1. Resolve to real path — fails if path does not exist
+    dir_real=$(realpath -e "${dir}" 2>/dev/null) \
+        || wt_die "Worktree path does not exist or cannot be resolved: '${dir}'"
+
+    # 2. Ensure it is within WORKTREE_PARENT
+    worktree_parent_real=$(realpath -e "${WORKTREE_PARENT}" 2>/dev/null) \
+        || wt_die "Cannot resolve WORKTREE_PARENT: '${WORKTREE_PARENT}'"
+    if [[ "${dir_real}" != "${worktree_parent_real}/"* ]]; then
+        wt_die "Worktree path '${dir_real}' is not within expected parent '${worktree_parent_real}'"
+    fi
+
+    # 3. Ensure it is a registered git worktree of OPENEMR_ROOT
+    if ! git -C "${OPENEMR_ROOT}" worktree list --porcelain 2>/dev/null \
+            | grep -qx "worktree ${dir_real}"; then
+        wt_die "Path '${dir_real}' is not a registered git worktree of '${OPENEMR_ROOT}'"
+    fi
+}
+
 # ============================================================================
 # COMPOSE FILE GENERATORS
 # ============================================================================
@@ -269,6 +296,7 @@ wt_compose_cmd() {
     dir=$(wt_state_get "${branch}" dir)
     env=$(wt_state_get "${branch}" env)
     if [[ -z "${dir}" ]]; then wt_die "No worktree found for branch '${branch}'"; fi
+    wt_validate_dir "${dir}"
     compose_subdir=$(wt_compose_subdir "${env}")
     check_docker_compose_install
     local slug
@@ -328,7 +356,29 @@ cmd_worktree_add() {
     fi
 
     wt_info "Setting up compose files (env=${env}, offset=${offset})"
+
+    # Guard against symlink attacks: a malicious branch could commit
+    # docker/ or docker/development-<env>/ as a symlink pointing outside
+    # the worktree. Refuse to proceed if either is a symlink.
+    if [[ -L "${dir}/docker" ]]; then
+        git -C "${OPENEMR_ROOT}" worktree remove --force "${dir}" 2>/dev/null || true
+        wt_die "Refusing: '${dir}/docker' is a symlink in the checked-out branch"
+    fi
+    if [[ -L "${dir}/${compose_subdir}" ]]; then
+        git -C "${OPENEMR_ROOT}" worktree remove --force "${dir}" 2>/dev/null || true
+        wt_die "Refusing: '${dir}/${compose_subdir}' is a symlink in the checked-out branch"
+    fi
+
     mkdir -p "${dir}/${compose_subdir}"
+
+    # Verify the compose subdir resolved within the worktree root (no traversal)
+    local wt_root_real compose_dir_real
+    wt_root_real=$(realpath -e "${dir}")
+    compose_dir_real=$(realpath -m "${dir}/${compose_subdir}")
+    if [[ "${compose_dir_real}/" != "${wt_root_real}/"* ]]; then
+        git -C "${OPENEMR_ROOT}" worktree remove --force "${dir}" 2>/dev/null || true
+        wt_die "Refusing: compose directory '${compose_dir_real}' is outside worktree root '${wt_root_real}'"
+    fi
 
     wt_write_env      "${dir}" "${branch}" "${offset}" "${env}"
     wt_write_override "${dir}" "${branch}" "${offset}" "${env}"
@@ -467,6 +517,8 @@ cmd_worktree_list() {
            [[ ! -f "${dir}/${compose_subdir}/.env" ]] || \
            [[ ! -f "${dir}/${compose_subdir}/docker-compose.override.yml" ]]; then
             status="missing"
+        elif ! wt_validate_dir "${dir}" 2>/dev/null; then
+            status="invalid"
         else
             ps_output=$("${DOCKER_COMPOSE_CMD[@]}" \
                 --env-file "${dir}/${compose_subdir}/.env" \
