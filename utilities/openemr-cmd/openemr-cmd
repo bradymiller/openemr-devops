@@ -138,8 +138,27 @@ wt_validate_dir() {
 
     # 3. Ensure it is a registered git worktree of OPENEMR_ROOT
     if ! git -C "${OPENEMR_ROOT}" worktree list --porcelain 2>/dev/null \
-            | grep -qx "worktree ${dir_real}"; then
+            | grep -Fqx "worktree ${dir_real}"; then
         wt_die "Path '${dir_real}' is not a registered git worktree of '${OPENEMR_ROOT}'"
+    fi
+}
+
+# Non-fatal version of wt_validate_dir for use in listing context.
+# Returns 1 on failure instead of calling wt_die (which exits the script),
+# so a single bad state entry does not abort the entire list command.
+wt_validate_dir_safe() {
+    local dir=$1
+    local dir_real worktree_parent_real
+
+    dir_real=$(realpath -e "${dir}" 2>/dev/null) || return 1
+
+    worktree_parent_real=$(realpath -e "${WORKTREE_PARENT}" 2>/dev/null) || return 1
+    if [[ "${dir_real}" != "${worktree_parent_real}/"* ]]; then
+        return 1
+    fi
+
+    if ! git -C "${OPENEMR_ROOT}" worktree list --porcelain 2>/dev/null             | grep -Fqx "worktree ${dir_real}"; then
+        return 1
     fi
 }
 
@@ -191,9 +210,37 @@ wt_write_override() {
     local compose_subdir
     compose_subdir=$(wt_compose_subdir "${env}")
 
-    local lib_root env_root
-    lib_root=$(realpath "${dir}/docker/library")
-    env_root=$(realpath "${dir}/${compose_subdir}")
+    local lib_root env_root wt_root_real
+    # Resolve the worktree root once for bounds checking below
+    wt_root_real=$(realpath -e "${dir}")
+
+    # Guard against nested symlinks that could resolve volume mount sources
+    # outside the worktree (e.g., docker/library -> /etc).
+    [[ -L "${dir}/docker/library" ]] && wt_die "Refusing: '${dir}/docker/library' is a symlink"
+    lib_root=$(realpath -e "${dir}/docker/library")         || wt_die "Missing directory: '${dir}/docker/library'"
+    if [[ "${lib_root}/" != "${wt_root_real}/"* ]]; then
+        wt_die "Refusing: docker/library resolves outside worktree: '${lib_root}'"
+    fi
+
+    [[ -L "${dir}/${compose_subdir}" ]] && wt_die "Refusing: '${dir}/${compose_subdir}' is a symlink"
+    env_root=$(realpath -e "${dir}/${compose_subdir}")         || wt_die "Missing directory: '${dir}/${compose_subdir}'"
+    if [[ "${env_root}/" != "${wt_root_real}/"* ]]; then
+        wt_die "Refusing: compose subdir resolves outside worktree: '${env_root}'"
+    fi
+
+    # For easy-redis: also guard php.ini since it is mounted directly into the container
+    if [[ "${env}" == "easy-redis" ]]; then
+        local php_ini="${dir}/${compose_subdir}/php.ini"
+        if [[ -e "${php_ini}" ]]; then
+            [[ -L "${php_ini}" ]] && wt_die "Refusing: '${php_ini}' is a symlink"
+            local php_ini_real
+            php_ini_real=$(realpath -e "${php_ini}") \
+                || wt_die "Cannot resolve: '${php_ini}'"
+            if [[ "${php_ini_real}" != "${wt_root_real}" && "${php_ini_real}/" != "${wt_root_real}/"* ]]; then
+                wt_die "Refusing: php.ini resolves outside worktree: '${php_ini_real}'"
+            fi
+        fi
+    fi
 
     local override_file="${dir}/${compose_subdir}/docker-compose.override.yml"
 
@@ -301,6 +348,11 @@ wt_compose_cmd() {
     check_docker_compose_install
     local slug
     slug=$(wt_slug "${branch}")
+    # Security note: docker-compose.yml is intentionally loaded from the
+    # worktree checkout so that compose changes on the branch are testable.
+    # This tool is designed for use on branches you own and trust — do not
+    # run worktree up/down/list against untrusted branches or PRs, as a
+    # malicious compose file could mount host paths or run arbitrary images.
     "${DOCKER_COMPOSE_CMD[@]}" \
         --env-file "${dir}/${compose_subdir}/.env" \
         -p "openemr-${slug}" \
@@ -513,21 +565,11 @@ cmd_worktree_list() {
         status="stopped"
         compose_subdir=$(wt_compose_subdir "${env}")
         slug=$(wt_slug "${branch}")
-        # Validate the worktree dir before using it for compose operations.
-        # wt_validate_dir calls wt_die internally, so we cannot call it inside
-        # an if/!/|| condition (shellcheck SC2310/SC2311/SC2312 — set -e is
-        # disabled in those contexts). Instead, temporarily disable set -e so
-        # we can call the function standalone and capture its exit code cleanly.
-        local validate_result=0
-        set +e
-        wt_validate_dir "${dir}" 2>/dev/null
-        validate_result=$?
-        set -e
         if [[ ! -d "${dir}" ]] || \
            [[ ! -f "${dir}/${compose_subdir}/.env" ]] || \
            [[ ! -f "${dir}/${compose_subdir}/docker-compose.override.yml" ]]; then
             status="missing"
-        elif [[ "${validate_result}" -ne 0 ]]; then
+        elif ! wt_validate_dir_safe "${dir}"; then
             status="invalid"
         else
             ps_output=$("${DOCKER_COMPOSE_CMD[@]}" \
