@@ -45,6 +45,8 @@ spec:
             echo "Copying configuration file and injecting passwords"
             cp /tmp/redis/redis.conf /etc/redis/redis.conf
             sed -i "s|__REPLICATION_PASSWORD__|$REDIS_REPLICATION_PASSWORD|g" /etc/redis/redis.conf
+            MY_FQDN="$(hostname).redis"
+            echo "replica-announce-ip $MY_FQDN" >> /etc/redis/redis.conf
             echo "Generating ACL file from template"
             cp /tmp/acl/users.acl /conf/acl/users.acl
             sed -i "s|__ADMIN_PASSWORD__|$REDIS_ADMIN_PASSWORD|g" /conf/acl/users.acl

@@ -8,7 +8,8 @@ kubectl apply ^
 timeout 30
 
 kubectl apply --validate=false -f https://github.com/cert-manager/cert-manager/releases/download/v1.20.2/cert-manager.yaml
-timeout 60
+kubectl wait --for=condition=Available --timeout=120s -n cert-manager deployment/cert-manager-webhook
+timeout 15
 
 kubectl apply ^
     -f certs/selfsigned-issuer.yaml ^
