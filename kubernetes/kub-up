@@ -1,6 +1,15 @@
 #!/bin/sh
 
-# first bring in cert-manager and allow enough time for it to set up
+# first bring in NFS provisioner for shared volumes (ReadWriteMany)
+kubectl apply \
+    -f nfs/rbac.yaml \
+    -f nfs/storageclass.yaml \
+    -f nfs/service.yaml \
+    -f nfs/deployment.yaml
+echo "...waiting 30 seconds for NFS provisioner to start..."
+sleep 30
+
+# bring in cert-manager and allow enough time for it to set up
 kubectl apply --validate=false -f https://github.com/cert-manager/cert-manager/releases/download/v1.20.2/cert-manager.yaml
 echo "...waiting a minute to allow cert-manager to set up..."
 sleep 60

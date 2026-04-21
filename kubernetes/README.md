@@ -52,7 +52,7 @@ Would not consider this production quality, but will be a good working, starting
             kind create cluster
             kubectl cluster-info --context kind-kind
             ```
-        - 4 nodes (1 control-plane node and 3 worker nodes), which will store shared volumes in host at /tmp/hostpath-provisioner to allow nodes to share volumes (you will need to remove the contents of the /tmp/hostpath-provisioner when tearing this down to prevent the shared volumes causing issues when rebuild it):
+        - 4 nodes (1 control-plane node and 3 worker nodes). Shared volumes use an in-cluster NFS provisioner (deployed by kub-up) so pods on different nodes can share ReadWriteMany volumes:
             ```bash
             kind create cluster --config kind-config-4-nodes.yaml
             kubectl cluster-info --context kind-kind
@@ -184,8 +184,4 @@ Would not consider this production quality, but will be a good working, starting
     - For Kind, also need to delete the cluster:
         ````bash
         kind delete cluster
-        ````
-    - Additionally, if using Kind with 4 nodes, then also need to delete the shared volume at /tmp/hostpath-provisioner
-        ````bash
-        sudo rm -fr /tmp/hostpath-provisioner
         ````

@@ -1,5 +1,12 @@
 @echo off
 
+kubectl apply ^
+    -f nfs/rbac.yaml ^
+    -f nfs/storageclass.yaml ^
+    -f nfs/service.yaml ^
+    -f nfs/deployment.yaml
+timeout 30
+
 kubectl apply --validate=false -f https://github.com/cert-manager/cert-manager/releases/download/v1.20.2/cert-manager.yaml
 timeout 60
 
