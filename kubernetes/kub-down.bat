@@ -37,3 +37,9 @@ kubectl delete ^
     -f openemr/secret.yaml ^
     -f openemr/deployment.yaml ^
     -f openemr/service.yaml
+
+kubectl delete ^
+    -f nfs/rbac.yaml ^
+    -f nfs/storageclass.yaml ^
+    -f nfs/service.yaml ^
+    -f nfs/deployment.yaml
