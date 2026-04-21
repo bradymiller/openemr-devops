@@ -9,10 +9,12 @@ kubectl apply \
 echo "...waiting 30 seconds for NFS provisioner to start..."
 sleep 30
 
-# bring in cert-manager and allow enough time for it to set up
+# bring in cert-manager and wait for its webhook to be ready
 kubectl apply --validate=false -f https://github.com/cert-manager/cert-manager/releases/download/v1.20.2/cert-manager.yaml
-echo "...waiting a minute to allow cert-manager to set up..."
-sleep 60
+echo "...waiting for cert-manager webhook to be ready..."
+kubectl wait --for=condition=Available --timeout=120s -n cert-manager deployment/cert-manager-webhook
+echo "...waiting 15 seconds for webhook to stabilize..."
+sleep 15
 
 kubectl apply \
     -f certs/selfsigned-issuer.yaml \
