@@ -1,9 +1,27 @@
 # Overview
 OpenEMR Kubernetes orchestration. Orchestration included OpenEMR, MariaDB, Redis, and phpMyAdmin.
   - OpenEMR - 3 deployment replications of OpenEMR are created. Replications can be increased/decreased. Ports for both http and https.
-  - MariaDB - 2 statefulset replications of MariaDB (1 primary/master with 1 replica/slave) are created. Replications can be increased/decreased which will increase/decrease number of replica/slaves. Connections are encrypted over the wire (ssl is enforced by default; X509 can be enforced by following pertinent comments in following scripts: 2 places in mysql/configmap.yaml, 2 places in openemr/deployment.yaml, 1 place in phpmyadmin/configmap.yaml, 1 place in phpmyadmin/deployment.yaml).
+  - MariaDB - 2 statefulset replications of MariaDB (1 primary/master with 1 replica/slave) are created. Replications can be increased/decreased which will increase/decrease number of replica/slaves. Connections use mTLS (mutual TLS / X509 client certificate verification) by default, including replication traffic. See the **MariaDB Connection Security** section below for details and how to downgrade to TLS-only or plain TCP.
   - Redis - Configured to support failover. There is 1 master and 2 slaves (no read access on slaves) for a statefulset and 3 sentinels for another statefulset. OpenEMR connects directly to Redis with mTLS (mutual TLS / X509 client certificate verification) by default. The primary/slaves and sentinels would require script changes if wish to increase/decrease replicates for these since these are hard-coded several places in the scripts. There are 3 users/passwords (`default` (defaultpassword), `replication` (replicationpassword), `admin` (adminpassword)) used in this redis scheme, and the passwords should be set to something else if use this scheme in production. The main place the passwords are set is in redis/configmap-acl.yaml script. Other places where passwords are used include the following: `replication` in redis/configmap-main.yaml, `admin` in redis/statefulset-sentinel.yaml. The `default` is the typical worker/app/client user. See the **Redis Connection Security** section below for details on the default mTLS configuration and how to downgrade to TLS-only or plain TCP.
   - phpMyAdmin - There is 1 deployment instance of phpMyAdmin. Ports for both http and https.
+
+## MariaDB Connection Security
+By default, MariaDB connections use **mTLS (mutual TLS)** with X509 client certificate verification for all connections (OpenEMR, phpMyAdmin, and replication). All certificates are managed by cert-manager. To downgrade the connection security:
+
+### Downgrade to TLS (encrypted, no client certs)
+1. `mysql/configmap.yaml`: In primary.sql, change `REQUIRE X509` to `REQUIRE SSL`. In secondary.sql, remove the `MASTER_SSL_CERT` and `MASTER_SSL_KEY` lines
+2. `openemr/deployment.yaml`: Change `FORCE_DATABASE_X509_CONNECT` to `FORCE_DATABASE_SSL_CONNECT` and remove the `tls.crt` (mysql-cert) and `tls.key` (mysql-key) items from the `mysql-openemr-client-certs` volume
+3. `phpmyadmin/configmap.yaml`: Comment out or remove the `ssl_cert` and `ssl_key` lines
+4. `phpmyadmin/deployment.yaml`: Remove the `tls.crt` and `tls.key` items from the `mysql-phpmyadmin-client-certs` volume
+
+### Downgrade to TCP (no encryption)
+Perform all the TLS downgrade steps above, then additionally:
+1. `mysql/configmap.yaml`: Remove `ssl_ca`, `ssl_cert`, `ssl_key` lines from both primary.cnf and replica.cnf. In primary.sql, change `REQUIRE SSL` to nothing. In secondary.sql, remove `MASTER_SSL_CA`, `MASTER_SSL`, and `MASTER_SSL_VERIFY_SERVER_CERT` lines
+2. `openemr/deployment.yaml`: Remove the `FORCE_DATABASE_SSL_CONNECT` environment variable and remove the entire `mysql-openemr-client-certs` volume and volumeMount
+3. `phpmyadmin/configmap.yaml`: Set `ssl` to `false`, remove `ssl_ca`, and remove `ssl_verify`
+4. `phpmyadmin/deployment.yaml`: Remove the entire `mysql-phpmyadmin-client-certs` volume and volumeMount
+5. `certs/mysql.yaml`, `certs/mysql-replication.yaml`, `certs/mysql-openemr-client.yaml`, `certs/mysql-phpmyadmin-client.yaml`: These cert-manager Certificate resources can be removed entirely
+6. `kub-up` and `kub-down` (and `.bat` variants): Remove the mysql cert references
 
 ## Redis Connection Security
 By default, Redis connections use **mTLS (mutual TLS)** with X509 client certificate verification. All certificates are managed by cert-manager. To downgrade the connection security:
