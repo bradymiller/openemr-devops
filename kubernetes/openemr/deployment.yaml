@@ -18,10 +18,10 @@ spec:
     spec:
       initContainers:
       - name: init-mysql-wait
-        image: busybox:1.28
+        image: busybox:1.37
         command: ['sh', '-c', "until nslookup mysql.$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace).svc.cluster.local; do echo waiting for mysql; sleep 2; done"]
       - name: init-redis-wait
-        image: busybox:1.28
+        image: busybox:1.37
         command: ['sh', '-c', "until nslookup redis.$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace).svc.cluster.local; do echo waiting for redis; sleep 2; done"]
       containers:
       - env:
@@ -80,6 +80,11 @@ spec:
             - cat
             - /root/instance-swarm-ready
           initialDelaySeconds: 5
+          periodSeconds: 30
+        livenessProbe:
+          tcpSocket:
+            port: 443
+          initialDelaySeconds: 60
           periodSeconds: 30
         volumeMounts:
         - mountPath: /root/certs/mysql/server

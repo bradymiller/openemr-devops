@@ -81,6 +81,16 @@ spec:
         ports:
         - containerPort: 5000
           name: sentinel
+        livenessProbe:
+          tcpSocket:
+            port: sentinel
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          tcpSocket:
+            port: sentinel
+          initialDelaySeconds: 5
+          periodSeconds: 10
         volumeMounts:
         - name: sentinel-certs
           mountPath: /certs/

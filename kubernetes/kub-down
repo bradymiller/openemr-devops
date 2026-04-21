@@ -13,7 +13,7 @@ kubectl delete \
     -f certs/redis-openemr-client.yaml \
     -f certs/sentinel.yaml
 
-kubectl delete -f https://github.com/cert-manager/cert-manager/releases/download/v1.11.0/cert-manager.yaml
+kubectl delete -f https://github.com/cert-manager/cert-manager/releases/download/v1.20.2/cert-manager.yaml
 
 kubectl delete \
     -f mysql/configmap.yaml \

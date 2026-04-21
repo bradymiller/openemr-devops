@@ -65,6 +65,22 @@ spec:
         ports:
         - containerPort: 3306
           name: mysql-port
+        livenessProbe:
+          exec:
+            command:
+            - bash
+            - -c
+            - mysqladmin ping -u root -p${MYSQL_ROOT_PASSWORD}
+          initialDelaySeconds: 30
+          periodSeconds: 20
+        readinessProbe:
+          exec:
+            command:
+            - bash
+            - -c
+            - mysqladmin ping -u root -p${MYSQL_ROOT_PASSWORD}
+          initialDelaySeconds: 15
+          periodSeconds: 10
         env:
         # Using Secrets
         - name: MYSQL_ROOT_PASSWORD
