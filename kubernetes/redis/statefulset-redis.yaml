@@ -20,7 +20,7 @@ spec:
         command: [ "sh", "-c" ]
         args:
           - |
-            # Set below to true if using redis x509
+            # To downgrade to tls (no client certs): change to false
             REDISX509=true
             TLSPARAMETERS="--tls --cacert /certs/ca.crt"
             if $REDISX509; then

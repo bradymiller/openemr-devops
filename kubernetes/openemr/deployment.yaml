@@ -52,9 +52,11 @@ spec:
           value: "defaultpassword"
         - name: REDIS_TLS
           value: "yes"
-        # uncomment below if using redis x509
         - name: REDIS_X509
           value: "yes"
+        # To downgrade redis connection security:
+        #   tls (no client certs): remove REDIS_X509 above and remove redis cert/key volume mounts below
+        #   tcp (no encryption): also remove REDIS_TLS above and remove redis ca volume mount below
         - name: SWARM_MODE
           value: "yes"
         - name: FORCE_DATABASE_SSL_CONNECT
@@ -107,7 +109,6 @@ spec:
           items:
           - key: ca.crt
             path: redis-ca
-          # uncomment below if using redis x509
           - key: tls.crt
             path: redis-cert
           - key: tls.key
