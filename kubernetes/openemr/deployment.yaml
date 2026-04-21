@@ -59,10 +59,12 @@ spec:
         #   tcp (no encryption): also remove REDIS_TLS above and remove redis ca volume mount below
         - name: SWARM_MODE
           value: "yes"
-        - name: FORCE_DATABASE_SSL_CONNECT
-        # uncomment below line (and comment above line) if forcing mysql x509
-        #- name: FORCE_DATABASE_X509_CONNECT
+        - name: FORCE_DATABASE_X509_CONNECT
           value: "1"
+        # To downgrade mysql connection security:
+        #   tls (no client certs): change FORCE_DATABASE_X509_CONNECT to FORCE_DATABASE_SSL_CONNECT
+        #     and remove mysql cert/key volume mounts below
+        #   tcp (no encryption): also remove the env var above and remove mysql ca volume mount below
         image: openemr/openemr:7.0.3
         name: openemr
         ports:
@@ -98,11 +100,10 @@ spec:
           items:
           - key: ca.crt
             path: mysql-ca
-          # uncomment below if forcing mysql x509
-          #- key: tls.crt
-          #  path: mysql-cert
-          #- key: tls.key
-          #  path: mysql-key
+          - key: tls.crt
+            path: mysql-cert
+          - key: tls.key
+            path: mysql-key
       - name: redis-openemr-client-certs
         secret:
           secretName: redis-openemr-client-certs
