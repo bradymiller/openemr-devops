@@ -21,7 +21,7 @@ data:
     
     # This is used by the replics nodes to communicate with master to replicate the data.
     # we are using a user called "replication" for this, and the a strong pwd for the same is given in masterauth
-    masterauth replicationpassword
+    masterauth __REPLICATION_PASSWORD__
     masteruser replication
     
     # this is the second ConfigMap will be mounted to. it has the list of users needed.
