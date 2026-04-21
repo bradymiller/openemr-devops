@@ -58,6 +58,16 @@ spec:
         ports:
         - containerPort: 6379
           name: redis
+        livenessProbe:
+          tcpSocket:
+            port: redis
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          tcpSocket:
+            port: redis
+          initialDelaySeconds: 5
+          periodSeconds: 10
         volumeMounts:
         - name: redis-certs
           mountPath: /certs/

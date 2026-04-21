@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # first bring in cert-manager and allow enough time for it to set up
-kubectl apply --validate=false -f https://github.com/cert-manager/cert-manager/releases/download/v1.11.0/cert-manager.yaml
+kubectl apply --validate=false -f https://github.com/cert-manager/cert-manager/releases/download/v1.20.2/cert-manager.yaml
 echo "...waiting a minute to allow cert-manager to set up..."
 sleep 60
 
