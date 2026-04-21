@@ -46,9 +46,18 @@ spec:
               key: admin-pass
         - name: OE_USER
           value: "admin"
-        - name: REDIS_SERVER
-          value: "redis-0.redis.default.svc.cluster.local"
-        - name: REDIS_PASSWORD
+        - name: SESSION_STORAGE_MODE
+          value: "predis-sentinel"
+        - name: REDIS_SENTINELS
+          value: "sentinel-0.sentinel|||sentinel-1.sentinel|||sentinel-2.sentinel"
+        - name: REDIS_MASTER
+          value: "mymaster"
+        - name: REDIS_SENTINELS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-credentials
+              key: default-password
+        - name: REDIS_MASTER_PASSWORD
           valueFrom:
             secretKeyRef:
               name: redis-credentials
@@ -57,9 +66,12 @@ spec:
           value: "yes"
         - name: REDIS_X509
           value: "yes"
+        - name: REDIS_TLS_CERT_KEY_PATH
+          value: "/redis-certs"
         # To downgrade redis connection security:
-        #   tls (no client certs): remove REDIS_X509 above and remove redis cert/key volume mounts below
-        #   tcp (no encryption): also remove REDIS_TLS above and remove redis ca volume mount below
+        #   tls (no client certs): remove REDIS_X509 above and remove redis client cert/key volume items below
+        #   tcp (no encryption): also remove REDIS_TLS and REDIS_TLS_CERT_KEY_PATH above and remove
+        #     the entire redis-openemr-client-certs volume and volumeMount below
         - name: SWARM_MODE
           value: "yes"
         - name: FORCE_DATABASE_X509_CONNECT
@@ -68,7 +80,7 @@ spec:
         #   tls (no client certs): change FORCE_DATABASE_X509_CONNECT to FORCE_DATABASE_SSL_CONNECT
         #     and remove mysql cert/key volume mounts below
         #   tcp (no encryption): also remove the env var above and remove mysql ca volume mount below
-        image: openemr/openemr:7.0.3
+        image: openemr/openemr:8.1.1
         name: openemr
         ports:
         - containerPort: 80
@@ -92,7 +104,7 @@ spec:
         volumeMounts:
         - mountPath: /root/certs/mysql/server
           name: mysql-openemr-client-certs
-        - mountPath: /root/certs/redis
+        - mountPath: /redis-certs
           name: redis-openemr-client-certs
         - mountPath: /var/www/localhost/htdocs/openemr/sites
           name: websitevolume
@@ -117,11 +129,17 @@ spec:
           secretName: redis-openemr-client-certs
           items:
           - key: ca.crt
-            path: redis-ca
+            path: redis-master-ca
           - key: tls.crt
-            path: redis-cert
+            path: redis-master-cert
           - key: tls.key
-            path: redis-key
+            path: redis-master-key
+          - key: ca.crt
+            path: redis-sentinel-ca
+          - key: tls.crt
+            path: redis-sentinel-cert
+          - key: tls.key
+            path: redis-sentinel-key
       - name: websitevolume
         persistentVolumeClaim:
           claimName: websitevolume

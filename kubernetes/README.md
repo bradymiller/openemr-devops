@@ -24,24 +24,24 @@ Perform all the TLS downgrade steps above, then additionally:
 6. `kub-up` and `kub-down` (and `.bat` variants): Remove the mysql cert references
 
 ## Redis Connection Security
-By default, Redis connections use **mTLS (mutual TLS)** with X509 client certificate verification. All certificates are managed by cert-manager. To downgrade the connection security:
+By default, Redis connections use **mTLS (mutual TLS)** with X509 client certificate verification. OpenEMR uses phpredis with Sentinel discovery for automatic failover (`SESSION_STORAGE_MODE=predis-sentinel`). All certificates are managed by cert-manager. To downgrade the connection security:
 
 ### Downgrade to TLS (encrypted, no client certs)
 1. `redis/configmap-main.yaml`: Change `tls-auth-clients yes` to `tls-auth-clients no`
 2. `redis/statefulset-redis.yaml`: Change `REDISX509=true` to `REDISX509=false`
 3. `redis/statefulset-sentinel.yaml`: Change `REDISX509=true` to `REDISX509=false` and change `tls-auth-clients yes` to `tls-auth-clients no`
-4. `openemr/deployment.yaml`: Remove the `REDIS_X509` environment variable and remove the `tls.crt` (redis-cert) and `tls.key` (redis-key) items from the `redis-openemr-client-certs` volume
+4. `openemr/deployment.yaml`: Remove the `REDIS_X509` environment variable and remove the client cert/key items (`redis-master-cert`, `redis-master-key`, `redis-sentinel-cert`, `redis-sentinel-key`) from the `redis-openemr-client-certs` volume
 
 ### Downgrade to TCP (no encryption)
 Perform all the TLS downgrade steps above, then additionally:
 1. `redis/configmap-main.yaml`: Remove all `tls-*` lines, change `port 0` to `port 6379`, and remove `tls-port 6379`
 2. `redis/statefulset-redis.yaml`: Remove the `TLSPARAMETERS` variable and its usage in redis-cli commands, and remove the `redis-certs` volume and volumeMount
 3. `redis/statefulset-sentinel.yaml`: Remove the `TLSPARAMETERS` variable and its usage in redis-cli commands, remove the `sentinel-certs` volume and volumeMount, and remove all `tls-*` lines from the sentinel config generation
-4. `openemr/deployment.yaml`: Remove the `REDIS_TLS` environment variable and remove the entire `redis-openemr-client-certs` volume and volumeMount
+4. `openemr/deployment.yaml`: Remove the `REDIS_TLS`, `REDIS_X509`, and `REDIS_TLS_CERT_KEY_PATH` environment variables and remove the entire `redis-openemr-client-certs` volume and volumeMount
 5. `certs/redis.yaml`, `certs/redis-openemr-client.yaml`, `certs/sentinel.yaml`: These cert-manager Certificate resources can be removed entirely
 6. `kub-up` and `kub-down` (and `.bat` variants): Remove the redis/sentinel cert references
 
-Would not consider this production quality, but will be a good working, starting point, and hopefully open the door to a myriad of other kubernetes based solutions. Note this is supported by 7.0.0 and higher dockers. If wish to use the most recent development codebase, then can change from openemr/openemr:7.0.3 to openemr/openemr:dev (in the openemr/deployment.yaml script), which is built nightly from the development codebase. If you wish to build dynamically from a branch/tag from a github repo or other git repo, then can change from openemr/openemr:7.0.3 to openemr/openemr:flex (in the openemr/deployment.yaml script) (note this will take much longer to start up (probably at least 10 minutes and up to 90 minutes) and is more cpu intensive since each instance of OpenEMR will download codebase and build separately).
+Would not consider this production quality, but will be a good working, starting point, and hopefully open the door to a myriad of other kubernetes based solutions. Note this is supported by 7.0.0 and higher dockers. If wish to use the most recent development codebase, then can change from openemr/openemr:8.1.1 to openemr/openemr:dev (in the openemr/deployment.yaml script), which is built nightly from the development codebase. If you wish to build dynamically from a branch/tag from a github repo or other git repo, then can change from openemr/openemr:8.1.1 to openemr/openemr:flex (in the openemr/deployment.yaml script) (note this will take much longer to start up (probably at least 10 minutes and up to 90 minutes) and is more cpu intensive since each instance of OpenEMR will download codebase and build separately).
 
 # Use
 1. Install (and then start) Kubernetes with Minikube or Kind or other.
