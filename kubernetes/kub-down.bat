@@ -18,8 +18,10 @@ kubectl delete -f https://github.com/cert-manager/cert-manager/releases/download
 kubectl delete ^
     -f mysql/configmap.yaml ^
     -f mysql/secret.yaml ^
+    -f mysql/replication-secret.yaml ^
     -f mysql/service.yaml ^
     -f mysql/statefulset.yaml ^
+    -f redis/secret.yaml ^
     -f redis/configmap-main.yaml ^
     -f redis/configmap-acl.yaml ^
     -f redis/statefulset-redis.yaml ^

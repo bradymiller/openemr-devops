@@ -18,9 +18,14 @@ spec:
       - name: config
         image: redis:alpine
         command: [ "sh", "-c" ]
+        env:
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-credentials
+              key: admin-password
         args:
           - |
-            REDIS_PASSWORD=adminpassword
             # To downgrade to tls (no client certs): change to false
             REDISX509=true
             nodes=redis-0.redis,redis-1.redis,redis-2.redis

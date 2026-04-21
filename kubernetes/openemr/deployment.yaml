@@ -49,7 +49,10 @@ spec:
         - name: REDIS_SERVER
           value: "redis-0.redis.default.svc.cluster.local"
         - name: REDIS_PASSWORD
-          value: "defaultpassword"
+          valueFrom:
+            secretKeyRef:
+              name: redis-credentials
+              key: default-password
         - name: REDIS_TLS
           value: "yes"
         - name: REDIS_X509

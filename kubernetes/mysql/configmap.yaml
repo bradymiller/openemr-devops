@@ -21,7 +21,7 @@ data:
     ssl_key=/etc/mysql/ssl/replication/tls.key
 
   primary.sql: |
-    CREATE USER 'repluser'@'%' IDENTIFIED BY 'replsecret';
+    CREATE USER 'repluser'@'%' IDENTIFIED BY '__REPL_PASSWORD__';
     GRANT REPLICATION REPLICA ON *.* TO 'repluser'@'%' REQUIRE X509;
     # To downgrade to tls (no client certs): change "REQUIRE X509" to "REQUIRE SSL"
     CREATE DATABASE primary_db;
@@ -34,7 +34,7 @@ data:
     CHANGE MASTER TO 
     MASTER_HOST='mysql-sts-0.mysql.default.svc.cluster.local',
     MASTER_USER='repluser',
-    MASTER_PASSWORD='replsecret',
+    MASTER_PASSWORD='__REPL_PASSWORD__',
     MASTER_CONNECT_RETRY=10,
     MASTER_SSL_CA='/etc/mysql/ssl/replication/ca.crt',
     MASTER_SSL_CERT='/etc/mysql/ssl/replication/tls.crt',

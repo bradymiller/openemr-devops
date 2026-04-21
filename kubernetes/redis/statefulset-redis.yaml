@@ -18,6 +18,22 @@ spec:
       - name: config
         image: redis:alpine
         command: [ "sh", "-c" ]
+        env:
+        - name: REDIS_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-credentials
+              key: admin-password
+        - name: REDIS_REPLICATION_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-credentials
+              key: replication-password
+        - name: REDIS_DEFAULT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-credentials
+              key: default-password
         args:
           - |
             # To downgrade to tls (no client certs): change to false
@@ -26,8 +42,14 @@ spec:
             if $REDISX509; then
                 TLSPARAMETERS="$TLSPARAMETERS --cert /certs/tls.crt --key /certs/tls.key"
             fi
-            echo "Copying configuration file"
-            cp /tmp/redis/redis.conf /etc/redis/redis.conf            
+            echo "Copying configuration file and injecting passwords"
+            cp /tmp/redis/redis.conf /etc/redis/redis.conf
+            sed -i "s|__REPLICATION_PASSWORD__|$REDIS_REPLICATION_PASSWORD|g" /etc/redis/redis.conf
+            echo "Generating ACL file from template"
+            cp /tmp/acl/users.acl /conf/acl/users.acl
+            sed -i "s|__ADMIN_PASSWORD__|$REDIS_ADMIN_PASSWORD|g" /conf/acl/users.acl
+            sed -i "s|__REPLICATION_PASSWORD__|$REDIS_REPLICATION_PASSWORD|g" /conf/acl/users.acl
+            sed -i "s|__DEFAULT_PASSWORD__|$REDIS_DEFAULT_PASSWORD|g" /conf/acl/users.acl
             if [ "$(redis-cli $TLSPARAMETERS -h sentinel -p 5000 ping)" != "PONG" ]; then
               echo "Sentinel not found to get the master info, defaulting to redis-0"
               if [ "$(hostname)" == "redis-0" ]; then
@@ -50,6 +72,10 @@ spec:
           mountPath: /etc/redis/
         - name: config
           mountPath: /tmp/redis/
+        - name: config-acl-template
+          mountPath: /tmp/acl/
+        - name: config-acl
+          mountPath: /conf/acl/
       containers:
       - name: redis
         image: redis:alpine
@@ -91,6 +117,8 @@ spec:
       - name: config
         configMap:
           name: redis-config
-      - name: config-acl
+      - name: config-acl-template
         configMap:
           name: redis-acl
+      - name: config-acl
+        emptyDir: {}
