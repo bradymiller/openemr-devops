@@ -2,8 +2,26 @@
 OpenEMR Kubernetes orchestration. Orchestration included OpenEMR, MariaDB, Redis, and phpMyAdmin.
   - OpenEMR - 3 deployment replications of OpenEMR are created. Replications can be increased/decreased. Ports for both http and https.
   - MariaDB - 2 statefulset replications of MariaDB (1 primary/master with 1 replica/slave) are created. Replications can be increased/decreased which will increase/decrease number of replica/slaves. Connections are encrypted over the wire (ssl is enforced by default; X509 can be enforced by following pertinent comments in following scripts: 2 places in mysql/configmap.yaml, 2 places in openemr/deployment.yaml, 1 place in phpmyadmin/configmap.yaml, 1 place in phpmyadmin/deployment.yaml).
-  - Redis - Configured to support failover. There is 1 master and 2 slaves (no read access on slaves) for a statefulset, 3 sentinels for another statefulset, and then 2 proxies deployment. The proxies ensure that redis traffic is always directed towards master. The proxy replications can be increased/decreased. However the primary/slaves and sentinels would require script changes if wish to increase/decrease replicates for these since these are hard-coded several place in the scripts. There are 3 users/passwords (`default` (defaultpassword), `replication` (replicationpassword), `admin` (adminpassword)) used in this redis scheme, and the passwords should be set to something else if use this scheme in production. The main place the passwords are set is in redis/configmap-acl.yaml script. Other places where passwords are used include the following: `replication` in redis/configmap-main.yaml, `admin` in redis/configmap-pipy.yaml, `admin` in redis/statefulset-sentinel.yaml, `admin` in redis/healthcheck-haproxy.yaml. The `default` is the typical worker/app/client user. Connections are encrypted over the wire (ssl is enforced by default; X509 can be enforced by following pertinent comments in following scripts: 2 places in openemr/deployment.yaml, 1 place in redis/configmap-main.yaml, 1 place in redis/healthcheck-haproxy.yaml, 1 place in redis/statefulset-redis.yaml, 2 places in redis/statefulset-sentinel.yaml).
+  - Redis - Configured to support failover. There is 1 master and 2 slaves (no read access on slaves) for a statefulset and 3 sentinels for another statefulset. OpenEMR connects directly to Redis with mTLS (mutual TLS / X509 client certificate verification) by default. The primary/slaves and sentinels would require script changes if wish to increase/decrease replicates for these since these are hard-coded several places in the scripts. There are 3 users/passwords (`default` (defaultpassword), `replication` (replicationpassword), `admin` (adminpassword)) used in this redis scheme, and the passwords should be set to something else if use this scheme in production. The main place the passwords are set is in redis/configmap-acl.yaml script. Other places where passwords are used include the following: `replication` in redis/configmap-main.yaml, `admin` in redis/statefulset-sentinel.yaml. The `default` is the typical worker/app/client user. See the **Redis Connection Security** section below for details on the default mTLS configuration and how to downgrade to TLS-only or plain TCP.
   - phpMyAdmin - There is 1 deployment instance of phpMyAdmin. Ports for both http and https.
+
+## Redis Connection Security
+By default, Redis connections use **mTLS (mutual TLS)** with X509 client certificate verification. All certificates are managed by cert-manager. To downgrade the connection security:
+
+### Downgrade to TLS (encrypted, no client certs)
+1. `redis/configmap-main.yaml`: Change `tls-auth-clients yes` to `tls-auth-clients no`
+2. `redis/statefulset-redis.yaml`: Change `REDISX509=true` to `REDISX509=false`
+3. `redis/statefulset-sentinel.yaml`: Change `REDISX509=true` to `REDISX509=false` and change `tls-auth-clients yes` to `tls-auth-clients no`
+4. `openemr/deployment.yaml`: Remove the `REDIS_X509` environment variable and remove the `tls.crt` (redis-cert) and `tls.key` (redis-key) items from the `redis-openemr-client-certs` volume
+
+### Downgrade to TCP (no encryption)
+Perform all the TLS downgrade steps above, then additionally:
+1. `redis/configmap-main.yaml`: Remove all `tls-*` lines, change `port 0` to `port 6379`, and remove `tls-port 6379`
+2. `redis/statefulset-redis.yaml`: Remove the `TLSPARAMETERS` variable and its usage in redis-cli commands, and remove the `redis-certs` volume and volumeMount
+3. `redis/statefulset-sentinel.yaml`: Remove the `TLSPARAMETERS` variable and its usage in redis-cli commands, remove the `sentinel-certs` volume and volumeMount, and remove all `tls-*` lines from the sentinel config generation
+4. `openemr/deployment.yaml`: Remove the `REDIS_TLS` environment variable and remove the entire `redis-openemr-client-certs` volume and volumeMount
+5. `certs/redis.yaml`, `certs/redis-openemr-client.yaml`, `certs/sentinel.yaml`: These cert-manager Certificate resources can be removed entirely
+6. `kub-up` and `kub-down` (and `.bat` variants): Remove the redis/sentinel cert references
 
 Would not consider this production quality, but will be a good working, starting point, and hopefully open the door to a myriad of other kubernetes based solutions. Note this is supported by 7.0.0 and higher dockers. If wish to use the most recent development codebase, then can change from openemr/openemr:7.0.3 to openemr/openemr:dev (in the openemr/deployment.yaml script), which is built nightly from the development codebase. If you wish to build dynamically from a branch/tag from a github repo or other git repo, then can change from openemr/openemr:7.0.3 to openemr/openemr:flex (in the openemr/deployment.yaml script) (note this will take much longer to start up (probably at least 10 minutes and up to 90 minutes) and is more cpu intensive since each instance of OpenEMR will download codebase and build separately).
 
@@ -49,8 +67,6 @@ Would not consider this production quality, but will be a good working, starting
           pod/redis-0                       1/1     Running   0          111s
           pod/redis-1                       1/1     Running   0          77s
           pod/redis-2                       1/1     Running   0          55s
-          pod/redisproxy-744b7749dc-c6pkw   1/1     Running   0          111s
-          pod/redisproxy-744b7749dc-k8rzp   1/1     Running   0          111s
           pod/sentinel-0                    1/1     Running   0          111s
           pod/sentinel-1                    1/1     Running   0          34s
           pod/sentinel-2                    1/1     Running   0          30s
@@ -61,18 +77,15 @@ Would not consider this production quality, but will be a good working, starting
           service/openemr      LoadBalancer   10.96.6.51     <pending>     8080:32561/TCP,8090:32468/TCP   111s
           service/phpmyadmin   NodePort       10.96.64.163   <none>        8081:32195/TCP,8091:31981/TCP   111s
           service/redis        ClusterIP      None           <none>        6379/TCP                        111s
-          service/redisproxy   ClusterIP      None           <none>        6379/TCP                        111s
           service/sentinel     ClusterIP      None           <none>        5000/TCP                        111s
 
           NAME                         READY   UP-TO-DATE   AVAILABLE   AGE
           deployment.apps/openemr      3/3     3            3           111s
           deployment.apps/phpmyadmin   1/1     1            1           111s
-          deployment.apps/redisproxy   2/2     2            2           111s
 
           NAME                                    DESIRED   CURRENT   READY   AGE
           replicaset.apps/openemr-7889cf48d8      3         3         3       111s
           replicaset.apps/phpmyadmin-f4d9bfc69    1         1         1       111s
-          replicaset.apps/redisproxy-744b7749dc   2         2         2       111s
 
           NAME                         READY   AGE
           statefulset.apps/mysql-sts   2/2     111s
@@ -117,7 +130,6 @@ Would not consider this production quality, but will be a good working, starting
             NAME                    DESIRED   CURRENT   READY   AGE
             openemr-7889cf48d8      3         3         3       9m22s
             phpmyadmin-f4d9bfc69    1         1         1       9m22s
-            redisproxy-744b7749dc   2         2         2       9m22s
             ```
     - Second, lets increase OpenEMR's replicas from 3 to 10 (ie. pretend in an environment where a huge number of OpenEMR users are using the system at the same time)
         ```bash

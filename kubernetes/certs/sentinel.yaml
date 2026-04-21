@@ -20,6 +20,13 @@ spec:
     organizations:
       - sentinel
   commonName: sentinel
+  dnsNames:
+    - sentinel-0.sentinel
+    - sentinel-1.sentinel
+    - sentinel-2.sentinel
+    - sentinel-0.sentinel.default.svc.cluster.local
+    - sentinel-1.sentinel.default.svc.cluster.local
+    - sentinel-2.sentinel.default.svc.cluster.local
   issuerRef:
     name: ca-issuer
     kind: Issuer
