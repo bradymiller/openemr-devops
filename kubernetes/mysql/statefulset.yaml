@@ -13,6 +13,7 @@ spec:
       labels:
         app: mysql
     spec:
+      automountServiceAccountToken: false
       initContainers:
       - name: init-mysql
         args:

@@ -48,4 +48,5 @@ kubectl apply ^
     -f volumes/website.yaml ^
     -f openemr/secret.yaml ^
     -f openemr/deployment.yaml ^
-    -f openemr/service.yaml
+    -f openemr/service.yaml ^
+    -f network/policies.yaml

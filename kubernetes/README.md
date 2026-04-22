@@ -1,4 +1,6 @@
 # Overview
+This solution requires OpenEMR Docker 8.1.0 or higher. While not a fully hardened production deployment, this provides a solid working foundation with mTLS encryption, Redis Sentinel failover, and multi-node support, and should open the door to a myriad of other Kubernetes-based solutions.
+
 OpenEMR Kubernetes orchestration. Orchestration included OpenEMR, MariaDB, Redis, and phpMyAdmin.
   - OpenEMR - 3 deployment replications of OpenEMR are created. Replications can be increased/decreased. Ports for both http and https.
   - MariaDB - 2 statefulset replications of MariaDB (1 primary/master with 1 replica/slave) are created. Replications can be increased/decreased which will increase/decrease number of replica/slaves. Connections use mTLS (mutual TLS / X509 client certificate verification) by default, including replication traffic. See the **MariaDB Connection Security** section below for details and how to downgrade to TLS-only or plain TCP.
@@ -41,15 +43,13 @@ Perform all the TLS downgrade steps above, then additionally:
 5. `certs/redis.yaml`, `certs/redis-openemr-client.yaml`, `certs/sentinel.yaml`: These cert-manager Certificate resources can be removed entirely
 6. `kub-up` and `kub-down` (and `.bat` variants): Remove the redis/sentinel cert references
 
-Would not consider this production quality, but will be a good working, starting point, and hopefully open the door to a myriad of other kubernetes based solutions. Note this is supported by 7.0.0 and higher dockers. If wish to use the most recent development codebase, then can change from openemr/openemr:8.1.1 to openemr/openemr:dev (in the openemr/deployment.yaml script), which is built nightly from the development codebase. If you wish to build dynamically from a branch/tag from a github repo or other git repo, then can change from openemr/openemr:8.1.1 to openemr/openemr:flex (in the openemr/deployment.yaml script) (note this will take much longer to start up (probably at least 10 minutes and up to 90 minutes) and is more cpu intensive since each instance of OpenEMR will download codebase and build separately).
-
 # Use
 1. Install (and then start) Kubernetes with Minikube or Kind or other.
     - For Minikube or other, can find online documentation.
     - For Kind, see below for instructions sets with 1 node or 4 nodes.
         - 1 node:
             ```bash
-            kind create cluster
+            kind create cluster --config kind-config-1-node.yaml
             ```
         - 4 nodes (1 control-plane node and 3 worker nodes). Shared volumes use an in-cluster NFS provisioner (deployed by kub-up) so pods on different nodes can share ReadWriteMany volumes:
             ```bash
@@ -86,10 +86,10 @@ Would not consider this production quality, but will be a good working, starting
           NAME                 TYPE           CLUSTER-IP     EXTERNAL-IP   PORT(S)                         AGE
           service/kubernetes   ClusterIP      10.96.0.1      <none>        443/TCP                         3m40s
           service/mysql        ClusterIP      None           <none>        3306/TCP                        111s
-          service/openemr      LoadBalancer   10.96.6.51     <pending>     8080:32561/TCP,8090:32468/TCP   111s
-          service/phpmyadmin   NodePort       10.96.64.163   <none>        8081:32195/TCP,8091:31981/TCP   111s
+          service/openemr      NodePort       10.96.6.51     <none>        8080:30080/TCP,8090:30443/TCP   111s
+          service/phpmyadmin   ClusterIP      10.96.64.163   <none>        8081/TCP,8091/TCP               111s
           service/redis        ClusterIP      None           <none>        6379/TCP                        111s
-          service/sentinel     ClusterIP      None           <none>        5000/TCP                        111s
+          service/sentinel     ClusterIP      None           <none>        26379/TCP                       111s
 
           NAME                         READY   UP-TO-DATE   AVAILABLE   AGE
           deployment.apps/openemr      3/3     3            3           111s
@@ -105,33 +105,17 @@ Would not consider this production quality, but will be a good working, starting
           statefulset.apps/sentinel    3/3     111s
           ```
 4. Getting the url link to OpenEMR:
-    - If using minikube, can get the link to go to OpenEMR with following command (use the top link for http and bottom link for https):
+    - If using kind with the provided config files, OpenEMR is mapped to localhost: `http://localhost:8800` or `https://localhost:9800`
+    - If using minikube:
         ```bash
         minikube service openemr --url
         ```
-        - It will look something like this:
-            ```console
-            http://192.168.99.100:31314
-            http://192.168.99.100:30613
-            ```
-    - If using kind, then can use the 3***** port(s) (1st is http, 2nd is https) shown in step 3 (at `service/openemr`) above with the ip address obtained from following command:
+5. Accessing phpMyAdmin:
+    - phpMyAdmin is not exposed externally for security. Access it via port-forward:
         ```bash
-        docker inspect kind-control-plane | grep "IPAddress"
+        kubectl port-forward service/phpmyadmin 8081:8081
         ```
-5. Getting the url link to phpMyAdmin:
-    - If using minikube, can get the link to go to phpMyAdmin with following command:
-        ```bash
-        minikube service phpmyadmin --url
-        ```
-        - It will look something like this:
-            ```console
-            http://192.168.99.100:30571
-            http://192.168.99.100:30578
-            ```
-    - If using kind, then can use the 3***** port(s) (1st is http, 2nd is https) shown in step 3 (at `service/phpmyadmin`) above with the ip address obtained from following command:
-        ```bash
-        docker inspect kind-control-plane | grep "IPAddress"
-        ```
+        Then navigate to `http://localhost:8081`. Press `Ctrl+C` to stop the port-forward when done.
 6. Some cool replicas stuff with OpenEMR. The OpenEMR docker pods are run as a replica set (since it is set to 3 replicas in this OpenEMR deployment script). Gonna cover how to view the replica set and how to change the number of replicas on the fly in this step.
     - First. lets list the replica set like this:
         ```bash
@@ -171,7 +155,25 @@ Would not consider this production quality, but will be a good working, starting
         ```bash
         kubectl scale sts mysql-sts --replicas=3
         ```
-8. To stop and remove OpenEMR orchestration (this will delete everything):
+8. Testing Redis Sentinel failover. Redis is configured with automatic failover via Sentinel. To test it:
+    - First, check which Redis pod is the current master:
+        ```bash
+        kubectl exec redis-0 -- redis-cli --tls --cacert /certs/ca.crt --cert /certs/tls.crt --key /certs/tls.key --user admin -a adminpassword info replication | grep role
+        ```
+    - Delete the master pod to simulate a failure:
+        ```bash
+        kubectl delete pod redis-0
+        ```
+    - Watch the sentinel logs to see the failover happen (~1 second):
+        ```bash
+        kubectl logs sentinel-0 | grep failover
+        ```
+    - Verify a new master was promoted:
+        ```bash
+        kubectl exec redis-1 -- redis-cli --tls --cacert /certs/ca.crt --cert /certs/tls.crt --key /certs/tls.key --user admin -a adminpassword info replication | grep role
+        ```
+    - OpenEMR continues working throughout the failover — the Sentinel-based session handler automatically discovers the new master.
+9. To stop and remove OpenEMR orchestration (this will delete everything):
     ```bash
     bash kub-down
     ```
