@@ -50,17 +50,11 @@ Would not consider this production quality, but will be a good working, starting
         - 1 node:
             ```bash
             kind create cluster
-            kubectl cluster-info --context kind-kind
             ```
         - 4 nodes (1 control-plane node and 3 worker nodes). Shared volumes use an in-cluster NFS provisioner (deployed by kub-up) so pods on different nodes can share ReadWriteMany volumes:
             ```bash
             kind create cluster --config kind-config-4-nodes.yaml
-            kubectl cluster-info --context kind-kind
             ```
-            - Use following command to ensure all the nodes are ready before proceeding to next step
-                ```bash
-                kubectl get nodes
-                ```
             - After you run the kub-up command below, here is a neat command to show which nodes the pods are in
                 ```bash
                 kubectl get pod -o wide

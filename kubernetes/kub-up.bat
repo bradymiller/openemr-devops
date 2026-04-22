@@ -1,5 +1,7 @@
 @echo off
 
+kubectl wait --for=condition=Ready nodes --all --timeout=120s
+
 kubectl apply ^
     -f nfs/rbac.yaml ^
     -f nfs/storageclass.yaml ^
