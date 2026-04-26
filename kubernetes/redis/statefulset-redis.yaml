@@ -45,14 +45,18 @@ spec:
             fi
             echo "Copying configuration file and injecting passwords"
             cp /tmp/redis/redis.conf /etc/redis/redis.conf
-            awk -v val="$REDIS_REPLICATION_PASSWORD" '{gsub(/__REPLICATION_PASSWORD__/, val); print}' /etc/redis/redis.conf > /etc/redis/redis.conf.tmp && mv /etc/redis/redis.conf.tmp /etc/redis/redis.conf
+            # Uses shell parameter expansion for literal replacement (safe with &, \, etc.)
+            contents=$(cat /etc/redis/redis.conf)
+            printf '%s\n' "${contents//__REPLICATION_PASSWORD__/$REDIS_REPLICATION_PASSWORD}" > /etc/redis/redis.conf
             MY_FQDN="$(hostname).redis"
             echo "replica-announce-ip $MY_FQDN" >> /etc/redis/redis.conf
             echo "Generating ACL file from template"
             cp /tmp/acl/users.acl /conf/acl/users.acl
-            awk -v val="$REDIS_ADMIN_PASSWORD" '{gsub(/__ADMIN_PASSWORD__/, val); print}' /conf/acl/users.acl > /conf/acl/users.acl.tmp && mv /conf/acl/users.acl.tmp /conf/acl/users.acl
-            awk -v val="$REDIS_REPLICATION_PASSWORD" '{gsub(/__REPLICATION_PASSWORD__/, val); print}' /conf/acl/users.acl > /conf/acl/users.acl.tmp && mv /conf/acl/users.acl.tmp /conf/acl/users.acl
-            awk -v val="$REDIS_DEFAULT_PASSWORD" '{gsub(/__DEFAULT_PASSWORD__/, val); print}' /conf/acl/users.acl > /conf/acl/users.acl.tmp && mv /conf/acl/users.acl.tmp /conf/acl/users.acl
+            contents=$(cat /conf/acl/users.acl)
+            contents="${contents//__ADMIN_PASSWORD__/$REDIS_ADMIN_PASSWORD}"
+            contents="${contents//__REPLICATION_PASSWORD__/$REDIS_REPLICATION_PASSWORD}"
+            contents="${contents//__DEFAULT_PASSWORD__/$REDIS_DEFAULT_PASSWORD}"
+            printf '%s\n' "$contents" > /conf/acl/users.acl
             SENTINELAUTH="--no-auth-warning -a $REDIS_DEFAULT_PASSWORD"
             if [ "$(redis-cli $TLSPARAMETERS $SENTINELAUTH -h sentinel -p 26379 ping)" != "PONG" ]; then
               echo "Sentinel not found to get the master info, defaulting to redis-0"
