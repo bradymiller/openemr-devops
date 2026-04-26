@@ -85,7 +85,7 @@ spec:
             tls-auth-clients no"
             fi
             echo "$SENTINEL_CONF" > /etc/redis/sentinel.conf
-            cat /etc/redis/sentinel.conf
+            echo "Sentinel configuration written"
         volumeMounts:
         - name: sentinel-certs
           mountPath: /certs/
