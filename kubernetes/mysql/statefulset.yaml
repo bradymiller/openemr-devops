@@ -52,8 +52,10 @@ spec:
             # On replicas use secondary configuration on initdb volume
             cp /mnt/config-map/secondary.sql /docker-entrypoint-initdb.d
           fi
-          # Inject replication password from secret
-          sed -i "s|__REPL_PASSWORD__|$MYSQL_REPL_PASSWORD|g" /docker-entrypoint-initdb.d/*.sql
+          # Inject replication password from secret (awk for safe handling of special chars)
+          for f in /docker-entrypoint-initdb.d/*.sql; do
+            awk -v val="$MYSQL_REPL_PASSWORD" '{gsub(/__REPL_PASSWORD__/, val); print}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+          done
           # Add an offset to avoid reserved server-id=0 value.
           echo server-id=$((3000 + $ordinal)) >> etc/mysql/conf.d/server-id.cnf
           ls /etc/mysql/conf.d/

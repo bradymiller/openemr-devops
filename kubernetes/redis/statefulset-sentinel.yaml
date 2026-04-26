@@ -62,12 +62,11 @@ spec:
                 fi
             done
             echo "Creating Sentinel configuration file"
-            echo "tls-port 26379
+            SENTINEL_CONF="tls-port 26379
             port 0
             tls-cert-file /certs/tls.crt
             tls-key-file /certs/tls.key
             tls-ca-cert-file /certs/ca.crt
-            tls-auth-clients yes
             tls-replication yes
             requirepass $REDIS_DEFAULT_PASSWORD
             sentinel monitor mymaster $MASTER 6379 2
@@ -77,8 +76,15 @@ spec:
             sentinel failover-timeout mymaster 60000
             sentinel parallel-syncs mymaster 1
             sentinel auth-user mymaster admin
-            sentinel auth-pass mymaster $REDIS_PASSWORD
-            " > /etc/redis/sentinel.conf
+            sentinel auth-pass mymaster $REDIS_PASSWORD"
+            if $REDISX509; then
+                SENTINEL_CONF="$SENTINEL_CONF
+            tls-auth-clients yes"
+            else
+                SENTINEL_CONF="$SENTINEL_CONF
+            tls-auth-clients no"
+            fi
+            echo "$SENTINEL_CONF" > /etc/redis/sentinel.conf
             cat /etc/redis/sentinel.conf
         volumeMounts:
         - name: sentinel-certs

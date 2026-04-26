@@ -102,23 +102,18 @@ spec:
     ports:
     - port: 26379
 ---
-# phpMyAdmin: allow ingress only from localhost/port-forward (no external)
-# ClusterIP service already restricts this, but this policy ensures
-# no other pod can reach phpMyAdmin either
+# phpMyAdmin: deny all pod-to-pod ingress.
+# Access is only via kubectl port-forward, which bypasses NetworkPolicy.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-phpmyadmin-ingress
+  name: deny-phpmyadmin-ingress
 spec:
   podSelector:
     matchLabels:
       name: phpmyadmin
   policyTypes:
   - Ingress
-  ingress:
-  - ports:
-    - port: 80
-    - port: 443
 ---
 # NFS provisioner: allow ingress from all pods that need shared volumes
 apiVersion: networking.k8s.io/v1

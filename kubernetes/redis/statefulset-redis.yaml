@@ -45,15 +45,16 @@ spec:
             fi
             echo "Copying configuration file and injecting passwords"
             cp /tmp/redis/redis.conf /etc/redis/redis.conf
-            sed -i "s|__REPLICATION_PASSWORD__|$REDIS_REPLICATION_PASSWORD|g" /etc/redis/redis.conf
+            awk -v val="$REDIS_REPLICATION_PASSWORD" '{gsub(/__REPLICATION_PASSWORD__/, val); print}' /etc/redis/redis.conf > /etc/redis/redis.conf.tmp && mv /etc/redis/redis.conf.tmp /etc/redis/redis.conf
             MY_FQDN="$(hostname).redis"
             echo "replica-announce-ip $MY_FQDN" >> /etc/redis/redis.conf
             echo "Generating ACL file from template"
             cp /tmp/acl/users.acl /conf/acl/users.acl
-            sed -i "s|__ADMIN_PASSWORD__|$REDIS_ADMIN_PASSWORD|g" /conf/acl/users.acl
-            sed -i "s|__REPLICATION_PASSWORD__|$REDIS_REPLICATION_PASSWORD|g" /conf/acl/users.acl
-            sed -i "s|__DEFAULT_PASSWORD__|$REDIS_DEFAULT_PASSWORD|g" /conf/acl/users.acl
-            if [ "$(redis-cli $TLSPARAMETERS -h sentinel -p 26379 ping)" != "PONG" ]; then
+            awk -v val="$REDIS_ADMIN_PASSWORD" '{gsub(/__ADMIN_PASSWORD__/, val); print}' /conf/acl/users.acl > /conf/acl/users.acl.tmp && mv /conf/acl/users.acl.tmp /conf/acl/users.acl
+            awk -v val="$REDIS_REPLICATION_PASSWORD" '{gsub(/__REPLICATION_PASSWORD__/, val); print}' /conf/acl/users.acl > /conf/acl/users.acl.tmp && mv /conf/acl/users.acl.tmp /conf/acl/users.acl
+            awk -v val="$REDIS_DEFAULT_PASSWORD" '{gsub(/__DEFAULT_PASSWORD__/, val); print}' /conf/acl/users.acl > /conf/acl/users.acl.tmp && mv /conf/acl/users.acl.tmp /conf/acl/users.acl
+            SENTINELAUTH="--no-auth-warning -a $REDIS_DEFAULT_PASSWORD"
+            if [ "$(redis-cli $TLSPARAMETERS $SENTINELAUTH -h sentinel -p 26379 ping)" != "PONG" ]; then
               echo "Sentinel not found to get the master info, defaulting to redis-0"
               if [ "$(hostname)" == "redis-0" ]; then
                 echo "This is redis-0, No need to update config."
@@ -64,7 +65,7 @@ spec:
               fi
             else
               echo "Sentinel found, finding master"
-              MASTER="$(redis-cli $TLSPARAMETERS -h sentinel -p 26379 sentinel get-master-addr-by-name mymaster | grep -E '(^redis-\d{1,})|([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})')"
+              MASTER="$(redis-cli $TLSPARAMETERS $SENTINELAUTH -h sentinel -p 26379 sentinel get-master-addr-by-name mymaster | grep -E '(^redis-\d{1,})|([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})')"
               echo "Master got: $MASTER, updating this in redis.conf"
               echo "REPLICAOF $MASTER 6379" >> /etc/redis/redis.conf
             fi
