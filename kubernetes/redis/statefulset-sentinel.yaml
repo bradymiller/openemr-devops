@@ -39,12 +39,13 @@ spec:
             if $REDISX509; then
                 TLSPARAMETERS="$TLSPARAMETERS --cert /certs/tls.crt --key /certs/tls.key"
             fi
+            export REDISCLI_AUTH="$REDIS_PASSWORD"
             echo "Looping through the redis list to see if Redis Master node is available now"
             while [ 1 ]
             do
                 for i in ${nodes//,/ }
                 do
-                    MASTER=$(redis-cli $TLSPARAMETERS --no-auth-warning --raw -h $i --user admin -a $REDIS_PASSWORD info replication | awk '{print $1}' | grep master_host: | cut -d ":" -f2)
+                    MASTER=$(redis-cli $TLSPARAMETERS --raw -h $i --user admin info replication | awk '{print $1}' | grep master_host: | cut -d ":" -f2)
                     if [ "$MASTER" == "" ]; then
                         echo "no master info found in $i"
                         MASTER=
