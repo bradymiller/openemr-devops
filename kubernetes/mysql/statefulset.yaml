@@ -17,9 +17,9 @@ spec:
       initContainers:
       - name: init-mysql
         args:
-        - mysqld
+        - mariadbd
         - --character-set-server=utf8mb4
-        image: mariadb:10.6
+        image: mariadb:11.8
         env:
         - name: MYSQL_REPL_PASSWORD
           valueFrom:
@@ -80,9 +80,9 @@ spec:
       containers:
       - name: mysql
         args:
-        - mysqld
+        - mariadbd
         - --character-set-server=utf8mb4
-        image: mariadb:10.6
+        image: mariadb:11.8
         ports:
         - containerPort: 3306
           name: mysql-port
@@ -91,7 +91,7 @@ spec:
             command:
             - bash
             - -c
-            - MYSQL_PWD="${MYSQL_ROOT_PASSWORD}" mysqladmin ping -u root
+            - MYSQL_PWD="${MYSQL_ROOT_PASSWORD}" mariadb-admin ping -u root
           initialDelaySeconds: 30
           periodSeconds: 20
         readinessProbe:
@@ -99,7 +99,7 @@ spec:
             command:
             - bash
             - -c
-            - MYSQL_PWD="${MYSQL_ROOT_PASSWORD}" mysqladmin ping -u root
+            - MYSQL_PWD="${MYSQL_ROOT_PASSWORD}" mariadb-admin ping -u root
           initialDelaySeconds: 15
           periodSeconds: 10
         env:
