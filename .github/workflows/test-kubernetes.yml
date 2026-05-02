@@ -75,13 +75,14 @@ jobs:
       - name: Test MariaDB replication
         run: |
           echo "--- Checking replica status ---"
-          SLAVE_IO=$(kubectl exec mysql-sts-1 -- mariadb -u root -proot -N -e "SHOW REPLICA STATUS\G" 2>/dev/null | grep "Slave_IO_Running:" | awk '{print $2}')
-          SLAVE_SQL=$(kubectl exec mysql-sts-1 -- mariadb -u root -proot -N -e "SHOW REPLICA STATUS\G" 2>/dev/null | grep "Slave_SQL_Running:" | head -1 | awk '{print $2}')
+          REPL_STATUS=$(kubectl exec mysql-sts-1 -- mariadb -u root -proot -e "SHOW REPLICA STATUS\G" 2>/dev/null)
+          SLAVE_IO=$(echo "$REPL_STATUS" | grep "Slave_IO_Running:" | awk '{print $NF}')
+          SLAVE_SQL=$(echo "$REPL_STATUS" | grep "Slave_SQL_Running:" | head -1 | awk '{print $NF}')
           echo "Slave_IO_Running: $SLAVE_IO"
           echo "Slave_SQL_Running: $SLAVE_SQL"
           if [ "$SLAVE_IO" != "Yes" ] || [ "$SLAVE_SQL" != "Yes" ]; then
             echo "ERROR: Replication not running"
-            kubectl exec mysql-sts-1 -- mariadb -u root -proot -e "SHOW REPLICA STATUS\G" 2>/dev/null
+            echo "$REPL_STATUS"
             exit 1
           fi
           echo "--- Checking data replication ---"
