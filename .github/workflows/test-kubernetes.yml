@@ -95,6 +95,39 @@ jobs:
           fi
           echo "PASS: MariaDB replication working (3 rows replicated)"
 
+      - name: Verify Redis rejects plain TCP connections
+        run: |
+          if kubectl exec redis-0 -- redis-cli -h redis-0.redis -p 6379 -a adminpassword ping 2>&1 | grep -q "PONG"; then
+            echo "ERROR: Redis accepted plain TCP connection — mTLS not enforced"
+            exit 1
+          fi
+          echo "PASS: Redis correctly rejected plain TCP connection"
+
+      - name: Verify Redis rejects TLS without client cert
+        run: |
+          if kubectl exec redis-0 -- redis-cli --tls --cacert /certs/ca.crt -h redis-0.redis -p 6379 -a adminpassword ping 2>&1 | grep -q "PONG"; then
+            echo "ERROR: Redis accepted TLS without client cert — mTLS not enforced"
+            exit 1
+          fi
+          echo "PASS: Redis correctly rejected TLS connection without client cert"
+
+      - name: Verify Redis accepts mTLS connection
+        run: |
+          RESULT=$(kubectl exec redis-0 -- redis-cli --tls --cacert /certs/ca.crt --cert /certs/tls.crt --key /certs/tls.key -h redis-0.redis -p 6379 --user admin -a adminpassword ping 2>/dev/null | tr -d '\r')
+          if [ "$RESULT" != "PONG" ]; then
+            echo "ERROR: Redis rejected mTLS connection (got: $RESULT)"
+            exit 1
+          fi
+          echo "PASS: Redis accepted mTLS connection"
+
+      - name: Verify MySQL rejects connections without client cert
+        run: |
+          if kubectl exec mysql-sts-0 -- mariadb -u repluser -preplsecret -h mysql-sts-0.mysql -e "SELECT 1" 2>&1 | grep -q "^1$"; then
+            echo "ERROR: MySQL accepted connection without client cert — X509 not enforced"
+            exit 1
+          fi
+          echo "PASS: MySQL correctly rejected connection without client cert (X509 enforced)"
+
       - name: Get OpenEMR pod name
         id: openemr-pod
         run: |
