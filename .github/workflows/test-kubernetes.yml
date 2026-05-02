@@ -39,17 +39,10 @@ jobs:
 
       - name: Wait for all pods to be ready
         run: |
-          echo "Waiting for MySQL..."
-          kubectl wait --for=condition=Ready pod/mysql-sts-0 --timeout=300s
-          kubectl wait --for=condition=Ready pod/mysql-sts-1 --timeout=300s
-          echo "Waiting for Redis..."
-          kubectl wait --for=condition=Ready pod/redis-0 --timeout=120s
-          kubectl wait --for=condition=Ready pod/redis-1 --timeout=120s
-          kubectl wait --for=condition=Ready pod/redis-2 --timeout=120s
-          echo "Waiting for Sentinel..."
-          kubectl wait --for=condition=Ready pod/sentinel-0 --timeout=120s
-          kubectl wait --for=condition=Ready pod/sentinel-1 --timeout=120s
-          kubectl wait --for=condition=Ready pod/sentinel-2 --timeout=120s
+          echo "Waiting for StatefulSets to create all pods..."
+          kubectl rollout status statefulset/mysql-sts --timeout=300s
+          kubectl rollout status statefulset/redis --timeout=300s
+          kubectl rollout status statefulset/sentinel --timeout=300s
           echo "Waiting for OpenEMR (may take several minutes for initial setup)..."
           kubectl wait --for=condition=Ready -l name=openemr pod --timeout=900s
           echo "All pods ready"
