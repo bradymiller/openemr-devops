@@ -103,6 +103,7 @@ jobs:
           echo "Using OpenEMR pod: $POD"
 
       - name: Initialize OpenEMR database
+        timeout-minutes: 2
         run: |
           kubectl exec mysql-sts-0 -- mariadb -u root -proot -e '
               INSERT INTO product_registration (opt_out) VALUES (1);
@@ -114,37 +115,51 @@ jobs:
             ' openemr
 
       - name: Install dev dependencies
+        timeout-minutes: 5
         run: |
           kubectl exec ${{ steps.openemr-pod.outputs.pod }} -- \
             sh -c 'cd /var/www/localhost/htdocs/openemr && composer install --dev --no-interaction --optimize-autoloader --ignore-platform-reqs'
 
       - name: Unit tests
+        timeout-minutes: 5
         run: |
+          kubectl get pod ${{ steps.openemr-pod.outputs.pod }} -o jsonpath='{.status.phase}'
+          echo ""
           kubectl exec ${{ steps.openemr-pod.outputs.pod }} -- \
             sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite unit'
 
       - name: Fixtures tests
+        timeout-minutes: 5
         run: |
+          kubectl get pod ${{ steps.openemr-pod.outputs.pod }} -o jsonpath='{.status.phase}' && echo ""
           kubectl exec ${{ steps.openemr-pod.outputs.pod }} -- \
             sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite fixtures'
 
       - name: Services tests
+        timeout-minutes: 5
         run: |
+          kubectl get pod ${{ steps.openemr-pod.outputs.pod }} -o jsonpath='{.status.phase}' && echo ""
           kubectl exec ${{ steps.openemr-pod.outputs.pod }} -- \
             sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite services'
 
       - name: Validators tests
+        timeout-minutes: 5
         run: |
+          kubectl get pod ${{ steps.openemr-pod.outputs.pod }} -o jsonpath='{.status.phase}' && echo ""
           kubectl exec ${{ steps.openemr-pod.outputs.pod }} -- \
             sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite validators'
 
       - name: Controllers tests
+        timeout-minutes: 5
         run: |
+          kubectl get pod ${{ steps.openemr-pod.outputs.pod }} -o jsonpath='{.status.phase}' && echo ""
           kubectl exec ${{ steps.openemr-pod.outputs.pod }} -- \
             sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite controllers'
 
       - name: Common tests
+        timeout-minutes: 5
         run: |
+          kubectl get pod ${{ steps.openemr-pod.outputs.pod }} -o jsonpath='{.status.phase}' && echo ""
           kubectl exec ${{ steps.openemr-pod.outputs.pod }} -- \
             sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite common'
 
