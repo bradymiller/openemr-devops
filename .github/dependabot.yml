@@ -46,7 +46,9 @@ updates:
   # Dependabot's docker ecosystem supports Kubernetes YAML files (image: fields).
   # Block major/minor bumps for version-pinned images (openemr, mariadb).
   - package-ecosystem: "docker"
-    directory: "/kubernetes"
+    directories:
+    - "/kubernetes"
+    - "/kubernetes/*"
     schedule:
       interval: "daily"
     ignore:
