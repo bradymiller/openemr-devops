@@ -84,67 +84,10 @@ runs:
       shell: bash
       working-directory: docker/openemr
 
-    - name: Initialize MySQL
-      run: |
-        docker compose exec "${OPENEMR_SERVICE_NAME}" mysql -u openemr --password="openemr" -h mysql -e '
-            INSERT INTO product_registration (opt_out) VALUES (1);
-            UPDATE globals SET gl_value = 1 WHERE gl_name = "rest_api";
-            UPDATE globals SET gl_value = 1 WHERE gl_name = "rest_fhir_api";
-            UPDATE globals SET gl_value = 1 WHERE gl_name = "rest_portal_api";
-            UPDATE globals SET gl_value = 3 WHERE gl_name = "oauth_password_grant";
-            UPDATE globals SET gl_value = 1 WHERE gl_name = "rest_system_scopes_api";
-        ' openemr
-      shell: bash
-      working-directory: docker/openemr
-
-    - name: Install Dev Tools
-      run: |
-        docker compose exec --workdir /var/www/localhost/htdocs/openemr "${OPENEMR_SERVICE_NAME}" \
-          composer install --dev --no-interaction --optimize-autoloader --ignore-platform-reqs
-      shell: bash
-      working-directory: docker/openemr
-
-    - name: Unit Test
-      run: |
-        docker compose exec --workdir /var/www/localhost/htdocs/openemr "${OPENEMR_SERVICE_NAME}" \
-          php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite unit
-      shell: bash
-      working-directory: docker/openemr
-
-    - name: Fixtures testing
-      run: |
-        docker compose exec --workdir /var/www/localhost/htdocs/openemr "${OPENEMR_SERVICE_NAME}" \
-          php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite fixtures
-      shell: bash
-      working-directory: docker/openemr
-
-    - name: Services testing
-      run: |
-        docker compose exec --workdir /var/www/localhost/htdocs/openemr "${OPENEMR_SERVICE_NAME}" \
-          php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite services
-      shell: bash
-      working-directory: docker/openemr
-
-    - name: Validators testing
-      run: |
-        docker compose exec --workdir /var/www/localhost/htdocs/openemr "${OPENEMR_SERVICE_NAME}" \
-          php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite validators
-      shell: bash
-      working-directory: docker/openemr
-
-    - name: Controllers testing
-      run: |
-        docker compose exec --workdir /var/www/localhost/htdocs/openemr "${OPENEMR_SERVICE_NAME}" \
-          php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite controllers
-      shell: bash
-      working-directory: docker/openemr
-
-    - name: Common testing
-      run: |
-        docker compose exec --workdir /var/www/localhost/htdocs/openemr "${OPENEMR_SERVICE_NAME}" \
-          php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite common
-      shell: bash
-      working-directory: docker/openemr
+    - name: Run OpenEMR test suites
+      uses: ./.github/actions/run-openemr-tests
+      with:
+        exec-prefix: "docker compose -f docker/openemr/docker-compose.yml exec ${{ env.OPENEMR_SERVICE_NAME }}"
 
     - name: Upload coverage reports
       if: ${{ env.OPENEMR_SERVICE_NAME == 'openemr-kcov-dev' || env.OPENEMR_SERVICE_NAME == 'openemr-kcov' }}

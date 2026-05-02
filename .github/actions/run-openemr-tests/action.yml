@@ -1,0 +1,64 @@
+name: 'Run OpenEMR Test Suites'
+description: 'Run phpunit test suites against an OpenEMR instance via a configurable exec command'
+inputs:
+  exec-prefix:
+    description: 'Command prefix to exec into the OpenEMR container (e.g. "docker compose exec openemr" or "kubectl exec mypod --")'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Initialize OpenEMR database
+      run: |
+        ${{ inputs.exec-prefix }} \
+          mysql -u openemr --password="openemr" -h mysql -e '
+            INSERT INTO product_registration (opt_out) VALUES (1);
+            UPDATE globals SET gl_value = 1 WHERE gl_name = "rest_api";
+            UPDATE globals SET gl_value = 1 WHERE gl_name = "rest_fhir_api";
+            UPDATE globals SET gl_value = 1 WHERE gl_name = "rest_portal_api";
+            UPDATE globals SET gl_value = 3 WHERE gl_name = "oauth_password_grant";
+            UPDATE globals SET gl_value = 1 WHERE gl_name = "rest_system_scopes_api";
+          ' openemr
+      shell: bash
+
+    - name: Install dev dependencies
+      run: |
+        ${{ inputs.exec-prefix }} \
+          sh -c 'cd /var/www/localhost/htdocs/openemr && composer install --dev --no-interaction --optimize-autoloader --ignore-platform-reqs'
+      shell: bash
+
+    - name: Unit tests
+      run: |
+        ${{ inputs.exec-prefix }} \
+          sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite unit'
+      shell: bash
+
+    - name: Fixtures tests
+      run: |
+        ${{ inputs.exec-prefix }} \
+          sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite fixtures'
+      shell: bash
+
+    - name: Services tests
+      run: |
+        ${{ inputs.exec-prefix }} \
+          sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite services'
+      shell: bash
+
+    - name: Validators tests
+      run: |
+        ${{ inputs.exec-prefix }} \
+          sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite validators'
+      shell: bash
+
+    - name: Controllers tests
+      run: |
+        ${{ inputs.exec-prefix }} \
+          sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite controllers'
+      shell: bash
+
+    - name: Common tests
+      run: |
+        ${{ inputs.exec-prefix }} \
+          sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite common'
+      shell: bash

@@ -1,0 +1,167 @@
+name: Kubernetes Integration Test
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/test-kubernetes.yml'
+      - 'kubernetes/**'
+  pull_request:
+    branches: [master]
+    paths:
+      - '.github/workflows/test-kubernetes.yml'
+      - 'kubernetes/**'
+  workflow_dispatch:
+
+jobs:
+  kubernetes-test:
+    name: Kubernetes mTLS + Sentinel + Replication
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Kind
+        run: |
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/latest/kind-linux-amd64
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+
+      - name: Create Kind cluster
+        run: kind create cluster --config kubernetes/kind-config-1-node.yaml
+
+      - name: Deploy OpenEMR stack
+        working-directory: kubernetes
+        run: bash kub-up
+
+      - name: Wait for all pods to be ready
+        run: |
+          echo "Waiting for MySQL..."
+          kubectl wait --for=condition=Ready pod/mysql-sts-0 --timeout=300s
+          kubectl wait --for=condition=Ready pod/mysql-sts-1 --timeout=300s
+          echo "Waiting for Redis..."
+          kubectl wait --for=condition=Ready pod/redis-0 --timeout=120s
+          kubectl wait --for=condition=Ready pod/redis-1 --timeout=120s
+          kubectl wait --for=condition=Ready pod/redis-2 --timeout=120s
+          echo "Waiting for Sentinel..."
+          kubectl wait --for=condition=Ready pod/sentinel-0 --timeout=120s
+          kubectl wait --for=condition=Ready pod/sentinel-1 --timeout=120s
+          kubectl wait --for=condition=Ready pod/sentinel-2 --timeout=120s
+          echo "Waiting for OpenEMR (may take several minutes for initial setup)..."
+          kubectl wait --for=condition=Ready -l name=openemr pod --timeout=600s
+          echo "All pods ready"
+
+      - name: Verify all pods running
+        run: |
+          kubectl get pods
+          NOT_RUNNING=$(kubectl get pods --no-headers | grep -v Running | grep -v Completed || true)
+          if [ -n "$NOT_RUNNING" ]; then
+            echo "ERROR: Some pods are not running:"
+            echo "$NOT_RUNNING"
+            exit 1
+          fi
+          echo "PASS: All pods running"
+
+      - name: Test OpenEMR HTTP response
+        run: |
+          # Port-forward in background
+          kubectl port-forward service/openemr 8080:8080 &
+          PF_PID=$!
+          sleep 3
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080 || echo "000")
+          kill $PF_PID 2>/dev/null || true
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "ERROR: OpenEMR returned HTTP $HTTP_CODE"
+            exit 1
+          fi
+          echo "PASS: OpenEMR HTTP responding (status $HTTP_CODE)"
+
+      - name: Test MariaDB replication
+        run: |
+          echo "--- Checking replica status ---"
+          SLAVE_IO=$(kubectl exec mysql-sts-1 -- mariadb -u root -proot -N -e "SHOW REPLICA STATUS\G" 2>/dev/null | grep "Slave_IO_Running:" | awk '{print $2}')
+          SLAVE_SQL=$(kubectl exec mysql-sts-1 -- mariadb -u root -proot -N -e "SHOW REPLICA STATUS\G" 2>/dev/null | grep "Slave_SQL_Running:" | head -1 | awk '{print $2}')
+          echo "Slave_IO_Running: $SLAVE_IO"
+          echo "Slave_SQL_Running: $SLAVE_SQL"
+          if [ "$SLAVE_IO" != "Yes" ] || [ "$SLAVE_SQL" != "Yes" ]; then
+            echo "ERROR: Replication not running"
+            kubectl exec mysql-sts-1 -- mariadb -u root -proot -e "SHOW REPLICA STATUS\G" 2>/dev/null
+            exit 1
+          fi
+          echo "--- Checking data replication ---"
+          kubectl exec mysql-sts-0 -- mariadb -u root -proot -e "CREATE DATABASE IF NOT EXISTS ci_test; CREATE TABLE IF NOT EXISTS ci_test.t1 (id INT PRIMARY KEY); INSERT IGNORE INTO ci_test.t1 VALUES (1),(2),(3);" 2>/dev/null
+          sleep 2
+          REPLICA_COUNT=$(kubectl exec mysql-sts-1 -- mariadb -u root -proot -N -e "SELECT COUNT(*) FROM ci_test.t1;" 2>/dev/null)
+          if [ "$REPLICA_COUNT" != "3" ]; then
+            echo "ERROR: Expected 3 rows in replica, got $REPLICA_COUNT"
+            exit 1
+          fi
+          echo "PASS: MariaDB replication working (3 rows replicated)"
+
+      - name: Get OpenEMR pod name
+        id: openemr-pod
+        run: |
+          POD=$(kubectl get pods -l name=openemr -o jsonpath='{.items[0].metadata.name}')
+          echo "pod=$POD" >> "$GITHUB_OUTPUT"
+          echo "Using OpenEMR pod: $POD"
+
+      - name: Run OpenEMR test suites
+        uses: ./.github/actions/run-openemr-tests
+        with:
+          exec-prefix: "kubectl exec ${{ steps.openemr-pod.outputs.pod }} --"
+
+      - name: Test Redis Sentinel failover
+        run: |
+          echo "--- Checking initial master ---"
+          ROLE_0=$(kubectl exec redis-0 -- redis-cli --tls --cacert /certs/ca.crt --cert /certs/tls.crt --key /certs/tls.key --user admin -a adminpassword info replication 2>/dev/null | grep "role:" | tr -d '\r')
+          echo "redis-0: $ROLE_0"
+          echo "--- Deleting redis-0 to trigger failover ---"
+          kubectl delete pod redis-0
+          echo "--- Waiting for failover ---"
+          sleep 15
+          echo "--- Checking for new master ---"
+          NEW_MASTER=""
+          for pod in redis-1 redis-2; do
+            ROLE=$(kubectl exec $pod -- redis-cli --tls --cacert /certs/ca.crt --cert /certs/tls.crt --key /certs/tls.key --user admin -a adminpassword info replication 2>/dev/null | grep "role:" | tr -d '\r')
+            echo "$pod: $ROLE"
+            if echo "$ROLE" | grep -q "master"; then
+              NEW_MASTER=$pod
+            fi
+          done
+          if [ -z "$NEW_MASTER" ]; then
+            echo "ERROR: No master found after failover"
+            kubectl logs sentinel-0 | tail -20
+            kubectl logs sentinel-1 | tail -20
+            kubectl logs sentinel-2 | tail -20
+            exit 1
+          fi
+          echo "PASS: Redis failover succeeded, new master is $NEW_MASTER"
+          echo "--- Checking sentinel logs ---"
+          kubectl logs sentinel-0 2>/dev/null | grep failover || true
+          kubectl logs sentinel-1 2>/dev/null | grep failover || true
+          kubectl logs sentinel-2 2>/dev/null | grep failover || true
+
+      - name: Collect debug info on failure
+        if: failure()
+        run: |
+          echo "=== Pod Status ==="
+          kubectl get pods -o wide
+          echo "=== Events ==="
+          kubectl get events --sort-by='.lastTimestamp' | tail -30
+          echo "=== OpenEMR Logs ==="
+          kubectl logs -l name=openemr --tail=50 2>/dev/null || true
+          echo "=== MySQL-0 Logs ==="
+          kubectl logs mysql-sts-0 --tail=50 2>/dev/null || true
+          echo "=== MySQL-1 Logs ==="
+          kubectl logs mysql-sts-1 --tail=50 2>/dev/null || true
+          echo "=== Redis-0 Logs ==="
+          kubectl logs redis-0 --tail=50 2>/dev/null || true
+          echo "=== Sentinel Logs ==="
+          kubectl logs sentinel-0 --tail=50 2>/dev/null || true
+
+      - name: Cleanup
+        if: always()
+        working-directory: kubernetes
+        run: |
+          bash kub-down 2>/dev/null || true
+          kind delete cluster 2>/dev/null || true
