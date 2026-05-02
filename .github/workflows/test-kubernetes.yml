@@ -123,8 +123,7 @@ jobs:
       - name: Unit tests
         timeout-minutes: 5
         run: |
-          kubectl get pod ${{ steps.openemr-pod.outputs.pod }} -o jsonpath='{.status.phase}'
-          echo ""
+          kubectl get pod ${{ steps.openemr-pod.outputs.pod }} -o jsonpath='{.status.phase}' && echo ""
           kubectl exec ${{ steps.openemr-pod.outputs.pod }} -- \
             sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite unit'
 
@@ -134,13 +133,6 @@ jobs:
           kubectl get pod ${{ steps.openemr-pod.outputs.pod }} -o jsonpath='{.status.phase}' && echo ""
           kubectl exec ${{ steps.openemr-pod.outputs.pod }} -- \
             sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite fixtures'
-
-      - name: Services tests
-        timeout-minutes: 5
-        run: |
-          kubectl get pod ${{ steps.openemr-pod.outputs.pod }} -o jsonpath='{.status.phase}' && echo ""
-          kubectl exec ${{ steps.openemr-pod.outputs.pod }} -- \
-            sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite services'
 
       - name: Validators tests
         timeout-minutes: 5
@@ -154,14 +146,31 @@ jobs:
         run: |
           kubectl get pod ${{ steps.openemr-pod.outputs.pod }} -o jsonpath='{.status.phase}' && echo ""
           kubectl exec ${{ steps.openemr-pod.outputs.pod }} -- \
-            sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite controllers'
+            sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite common'
 
       - name: Common tests
         timeout-minutes: 5
         run: |
           kubectl get pod ${{ steps.openemr-pod.outputs.pod }} -o jsonpath='{.status.phase}' && echo ""
           kubectl exec ${{ steps.openemr-pod.outputs.pod }} -- \
-            sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite common'
+            sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite controllers'
+
+      # Services is run last because the CCDA validation test spawns a background
+      # Node.js HTTP server (port 6662) that outlives phpunit. The orphaned process
+      # keeps the kubectl exec session open, blocking subsequent exec calls.
+      - name: Services tests
+        timeout-minutes: 5
+        run: |
+          kubectl get pod ${{ steps.openemr-pod.outputs.pod }} -o jsonpath='{.status.phase}' && echo ""
+          kubectl exec ${{ steps.openemr-pod.outputs.pod }} -- \
+            sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite services'
+
+      # Kill the orphaned CCDA Node.js server so it doesn't block the remaining steps
+      - name: Cleanup stale processes after services tests
+        if: always()
+        run: |
+          kubectl exec ${{ steps.openemr-pod.outputs.pod }} -- \
+            sh -c 'pkill -f "node.*6662" 2>/dev/null || true'
 
       - name: Test Redis Sentinel failover
         run: |
