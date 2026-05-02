@@ -32,7 +32,10 @@ jobs:
 
       - name: Deploy OpenEMR stack
         working-directory: kubernetes
-        run: bash kub-up
+        run: |
+          bash kub-up
+          # Scale down OpenEMR replicas for CI resource constraints
+          kubectl scale deployment openemr --replicas=2
 
       - name: Wait for all pods to be ready
         run: |
@@ -48,7 +51,7 @@ jobs:
           kubectl wait --for=condition=Ready pod/sentinel-1 --timeout=120s
           kubectl wait --for=condition=Ready pod/sentinel-2 --timeout=120s
           echo "Waiting for OpenEMR (may take several minutes for initial setup)..."
-          kubectl wait --for=condition=Ready -l name=openemr pod --timeout=600s
+          kubectl wait --for=condition=Ready -l name=openemr pod --timeout=900s
           echo "All pods ready"
 
       - name: Verify all pods running
