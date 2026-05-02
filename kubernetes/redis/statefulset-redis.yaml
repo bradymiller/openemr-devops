@@ -17,7 +17,7 @@ spec:
       automountServiceAccountToken: false
       initContainers:
       - name: config
-        image: redis:alpine
+        image: redis:8.6-alpine
         command: [ "sh", "-c" ]
         env:
         - name: REDIS_ADMIN_PASSWORD
@@ -95,7 +95,7 @@ spec:
           mountPath: /conf/acl/
       containers:
       - name: redis
-        image: redis:alpine
+        image: redis:8.6-alpine
         command: ["redis-server"]
         args: ["/etc/redis/redis.conf"]
         ports:
