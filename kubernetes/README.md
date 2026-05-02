@@ -14,14 +14,14 @@ All passwords (Redis, MariaDB replication) are stored in Kubernetes Secret resou
 By default, MariaDB connections use **mTLS (mutual TLS)** with X509 client certificate verification for all connections (OpenEMR, phpMyAdmin, and replication). All certificates are managed by cert-manager. To downgrade the connection security:
 
 ### Downgrade to TLS (encrypted, no client certs)
-1. `mysql/configmap.yaml`: In primary.sql, change `REQUIRE X509` to `REQUIRE SSL`. In secondary.sql, remove the `SOURCE_SSL_CERT` and `SOURCE_SSL_KEY` lines
+1. `mysql/configmap.yaml`: In primary.sql, change `REQUIRE X509` to `REQUIRE SSL`. In secondary.sql, remove the `MASTER_SSL_CERT` and `MASTER_SSL_KEY` lines
 2. `openemr/deployment.yaml`: Change `FORCE_DATABASE_X509_CONNECT` to `FORCE_DATABASE_SSL_CONNECT` and remove the `tls.crt` (mysql-cert) and `tls.key` (mysql-key) items from the `mysql-openemr-client-certs` volume
 3. `phpmyadmin/configmap.yaml`: Comment out or remove the `ssl_cert` and `ssl_key` lines
 4. `phpmyadmin/deployment.yaml`: Remove the `tls.crt` and `tls.key` items from the `mysql-phpmyadmin-client-certs` volume
 
 ### Downgrade to TCP (no encryption)
 Perform all the TLS downgrade steps above, then additionally:
-1. `mysql/configmap.yaml`: Remove `ssl_ca`, `ssl_cert`, `ssl_key` lines from both primary.cnf and replica.cnf. In primary.sql, change `REQUIRE SSL` to nothing. In secondary.sql, remove `SOURCE_SSL_CA`, `SOURCE_SSL`, and `SOURCE_SSL_VERIFY_SERVER_CERT` lines
+1. `mysql/configmap.yaml`: Remove `ssl_ca`, `ssl_cert`, `ssl_key` lines from both primary.cnf and replica.cnf. In primary.sql, change `REQUIRE SSL` to nothing. In secondary.sql, remove `MASTER_SSL_CA`, `MASTER_SSL`, and `MASTER_SSL_VERIFY_SERVER_CERT` lines
 2. `openemr/deployment.yaml`: Remove the `FORCE_DATABASE_SSL_CONNECT` environment variable and remove the entire `mysql-openemr-client-certs` volume and volumeMount
 3. `phpmyadmin/configmap.yaml`: Set `ssl` to `false`, remove `ssl_ca`, and remove `ssl_verify`
 4. `phpmyadmin/deployment.yaml`: Remove the entire `mysql-phpmyadmin-client-certs` volume and volumeMount

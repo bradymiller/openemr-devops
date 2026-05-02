@@ -31,14 +31,14 @@ data:
     # service `mysql` in advance as an FQDN.
     # No need to use master_port
     # encryption with server cert verification is configured
-    CHANGE REPLICATION SOURCE TO
-    SOURCE_HOST='mysql-sts-0.mysql.default.svc.cluster.local',
-    SOURCE_USER='repluser',
-    SOURCE_PASSWORD='__REPL_PASSWORD__',
-    SOURCE_CONNECT_RETRY=10,
-    SOURCE_SSL_CA='/etc/mysql/ssl/replication/ca.crt',
-    SOURCE_SSL_CERT='/etc/mysql/ssl/replication/tls.crt',
-    SOURCE_SSL_KEY='/etc/mysql/ssl/replication/tls.key',
-    SOURCE_SSL=1,
-    SOURCE_SSL_VERIFY_SERVER_CERT=1;
-    # To downgrade to tls (no client certs): remove SOURCE_SSL_CERT and SOURCE_SSL_KEY lines above
+    CHANGE MASTER TO
+    MASTER_HOST='mysql-sts-0.mysql.default.svc.cluster.local',
+    MASTER_USER='repluser',
+    MASTER_PASSWORD='__REPL_PASSWORD__',
+    MASTER_CONNECT_RETRY=10,
+    MASTER_SSL_CA='/etc/mysql/ssl/replication/ca.crt',
+    MASTER_SSL_CERT='/etc/mysql/ssl/replication/tls.crt',
+    MASTER_SSL_KEY='/etc/mysql/ssl/replication/tls.key',
+    MASTER_SSL=1,
+    MASTER_SSL_VERIFY_SERVER_CERT=1;
+    # To downgrade to tls (no client certs): remove MASTER_SSL_CERT and MASTER_SSL_KEY lines above
