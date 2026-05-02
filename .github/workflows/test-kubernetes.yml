@@ -104,8 +104,7 @@ jobs:
 
       - name: Initialize OpenEMR database
         run: |
-          kubectl exec ${{ steps.openemr-pod.outputs.pod }} -- \
-            mysql -u openemr --password="openemr" -h mysql -e '
+          kubectl exec mysql-sts-0 -- mariadb -u root -proot -e '
               INSERT INTO product_registration (opt_out) VALUES (1);
               UPDATE globals SET gl_value = 1 WHERE gl_name = "rest_api";
               UPDATE globals SET gl_value = 1 WHERE gl_name = "rest_fhir_api";
