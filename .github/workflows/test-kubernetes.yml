@@ -105,10 +105,52 @@ jobs:
           echo "pod=$POD" >> "$GITHUB_OUTPUT"
           echo "Using OpenEMR pod: $POD"
 
-      - name: Run OpenEMR test suites
-        uses: ./.github/actions/run-openemr-tests
-        with:
-          exec-prefix: "kubectl exec ${{ steps.openemr-pod.outputs.pod }} --"
+      - name: Initialize OpenEMR database
+        run: |
+          kubectl exec ${{ steps.openemr-pod.outputs.pod }} -- \
+            mysql -u openemr --password="openemr" -h mysql -e '
+              INSERT INTO product_registration (opt_out) VALUES (1);
+              UPDATE globals SET gl_value = 1 WHERE gl_name = "rest_api";
+              UPDATE globals SET gl_value = 1 WHERE gl_name = "rest_fhir_api";
+              UPDATE globals SET gl_value = 1 WHERE gl_name = "rest_portal_api";
+              UPDATE globals SET gl_value = 3 WHERE gl_name = "oauth_password_grant";
+              UPDATE globals SET gl_value = 1 WHERE gl_name = "rest_system_scopes_api";
+            ' openemr
+
+      - name: Install dev dependencies
+        run: |
+          kubectl exec ${{ steps.openemr-pod.outputs.pod }} -- \
+            sh -c 'cd /var/www/localhost/htdocs/openemr && composer install --dev --no-interaction --optimize-autoloader --ignore-platform-reqs'
+
+      - name: Unit tests
+        run: |
+          kubectl exec ${{ steps.openemr-pod.outputs.pod }} -- \
+            sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite unit'
+
+      - name: Fixtures tests
+        run: |
+          kubectl exec ${{ steps.openemr-pod.outputs.pod }} -- \
+            sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite fixtures'
+
+      - name: Services tests
+        run: |
+          kubectl exec ${{ steps.openemr-pod.outputs.pod }} -- \
+            sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite services'
+
+      - name: Validators tests
+        run: |
+          kubectl exec ${{ steps.openemr-pod.outputs.pod }} -- \
+            sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite validators'
+
+      - name: Controllers tests
+        run: |
+          kubectl exec ${{ steps.openemr-pod.outputs.pod }} -- \
+            sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite controllers'
+
+      - name: Common tests
+        run: |
+          kubectl exec ${{ steps.openemr-pod.outputs.pod }} -- \
+            sh -c 'cd /var/www/localhost/htdocs/openemr && php -d memory_limit=8G ./vendor/bin/phpunit --colors=always --testdox --stop-on-failure --testsuite common'
 
       - name: Test Redis Sentinel failover
         run: |
