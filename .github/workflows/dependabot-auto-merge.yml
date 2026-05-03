@@ -4,7 +4,6 @@ on:
   pull_request_target:
 
 permissions:
-  contents: write
   pull-requests: write
 
 jobs:
@@ -18,10 +17,11 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Only auto-merge Kubernetes Docker image updates (not other ecosystems)
-      - name: Enable auto-merge for Kubernetes Docker updates
+      # Tell Dependabot to merge using its own bypassed permissions.
+      # The workflow just leaves a comment — Dependabot performs the actual merge.
+      - name: Tell Dependabot to merge Kubernetes Docker updates
         if: steps.metadata.outputs.package-ecosystem == 'docker' && (steps.metadata.outputs.directory == '/kubernetes' || startsWith(steps.metadata.outputs.directory, '/kubernetes/'))
-        run: gh pr merge --auto --squash "$PR_URL"
+        run: gh pr comment "$PR_URL" --body "@dependabot squash and merge"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
