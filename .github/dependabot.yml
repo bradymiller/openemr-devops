@@ -47,6 +47,7 @@ updates:
   # Block major/minor bumps for version-pinned images (openemr, mariadb).
   - package-ecosystem: "docker"
     directories:
+    - "/kubernetes"
     - "/kubernetes/openemr"
     - "/kubernetes/mysql"
     - "/kubernetes/redis"
