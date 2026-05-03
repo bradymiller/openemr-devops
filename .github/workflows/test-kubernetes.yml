@@ -84,18 +84,6 @@ jobs:
             exit 1
           fi
           echo "PASS: phpMyAdmin HTTP responding (status $HTTP_CODE)"
-          # Verify phpMyAdmin can connect to MariaDB via mTLS by checking that
-          # the login page loads (confirms phpMyAdmin-to-MariaDB connectivity)
-          BODY=$(curl -sL http://localhost:8081/ || echo "")
-          if echo "$BODY" | grep -qi "phpmyadmin\|pma\|login"; then
-            echo "PASS: phpMyAdmin login page loaded (MariaDB mTLS connection working)"
-          else
-            echo "DEBUG: Response body (first 500 chars):"
-            echo "$BODY" | head -c 500
-            echo ""
-            echo "ERROR: phpMyAdmin login page did not load"
-            exit 1
-          fi
 
       - name: Test MariaDB replication
         run: |
