@@ -113,9 +113,9 @@ jobs:
           POD1=$(kubectl get pods -l name=openemr -o jsonpath='{.items[0].metadata.name}')
           POD2=$(kubectl get pods -l name=openemr -o jsonpath='{.items[1].metadata.name}')
           echo "Writing from $POD1, reading from $POD2"
-          kubectl exec $POD1 -- sh -c 'echo "shared-volume-test" > /var/www/localhost/htdocs/openemr/sites/nfs-test.txt'
-          RESULT=$(kubectl exec $POD2 -- cat /var/www/localhost/htdocs/openemr/sites/nfs-test.txt 2>/dev/null)
-          kubectl exec $POD1 -- rm -f /var/www/localhost/htdocs/openemr/sites/nfs-test.txt
+          kubectl exec "$POD1" -- sh -c 'echo "shared-volume-test" > /var/www/localhost/htdocs/openemr/sites/nfs-test.txt'
+          RESULT=$(kubectl exec "$POD2" -- cat /var/www/localhost/htdocs/openemr/sites/nfs-test.txt 2>/dev/null)
+          kubectl exec "$POD1" -- rm -f /var/www/localhost/htdocs/openemr/sites/nfs-test.txt
           if [ "$RESULT" != "shared-volume-test" ]; then
             echo "ERROR: NFS shared volume not working (pod2 got: $RESULT)"
             exit 1
