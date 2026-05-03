@@ -21,7 +21,7 @@ jobs:
       # The workflow just leaves a comment — Dependabot performs the actual merge.
       - name: Tell Dependabot to merge Kubernetes Docker updates
         if: steps.metadata.outputs.package-ecosystem == 'docker' && (steps.metadata.outputs.directory == '/kubernetes' || startsWith(steps.metadata.outputs.directory, '/kubernetes/'))
-        run: gh pr comment "$PR_URL" --body "@dependabot merge"
+        run: gh pr comment "$PR_URL" --body "@dependabot squash and merge"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
