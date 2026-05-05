@@ -541,7 +541,7 @@ cmd_worktree_list() {
     wt_require_cmd jq
     wt_init_state
 
-    local main_branch jq_output status compose_subdir slug ps_output
+    local main_branch jq_output status compose_subdir slug ps_running ps_all
     main_branch=$(git -C "${OPENEMR_ROOT}" symbolic-ref --short HEAD 2>/dev/null || echo "detached")
 
     printf "%-30s %-12s %-8s %-10s %s\n" "BRANCH" "ENV" "OFFSET" "STATUS" "DIRECTORY"
