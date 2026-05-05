@@ -562,7 +562,7 @@ cmd_worktree_list() {
     check_docker_compose_install
     jq_output=$(jq -r 'to_entries[] | [.key, (.value.offset|tostring), .value.dir, .value.env] | @tsv' "${WT_STATE_FILE}")
     while IFS=$'\t' read -r branch offset dir env; do
-        status="stopped"
+        status="none"
         compose_subdir=$(wt_compose_subdir "${env}")
         slug=$(wt_slug "${branch}")
         local validate_result=0
@@ -574,14 +574,24 @@ cmd_worktree_list() {
         elif [[ "${validate_result}" -ne 0 ]]; then
             status="invalid"
         else
-            ps_output=$("${DOCKER_COMPOSE_CMD[@]}" \
+            ps_running=$("${DOCKER_COMPOSE_CMD[@]}" \
                 --env-file "${dir}/${compose_subdir}/.env" \
                 -p "openemr-${slug}" \
                 -f "${dir}/${compose_subdir}/docker-compose.yml" \
                 -f "${dir}/${compose_subdir}/docker-compose.override.yml" \
                 ps --services --filter "status=running" 2>/dev/null) || true
-            if echo "${ps_output}" | grep -q openemr; then
+            if echo "${ps_running}" | grep -q openemr; then
                 status="running"
+            else
+                ps_all=$("${DOCKER_COMPOSE_CMD[@]}" \
+                    --env-file "${dir}/${compose_subdir}/.env" \
+                    -p "openemr-${slug}" \
+                    -f "${dir}/${compose_subdir}/docker-compose.yml" \
+                    -f "${dir}/${compose_subdir}/docker-compose.override.yml" \
+                    ps -aq 2>/dev/null) || true
+                if [[ -n "${ps_all}" ]]; then
+                    status="stopped"
+                fi
             fi
         fi
         printf "%-30s %-12s %-8s %-10s %s\n" "${branch}" "${env}" "${offset}" "${status}" "${dir}"
