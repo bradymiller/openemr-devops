@@ -18,7 +18,7 @@ set -euo pipefail
 #################################################################################################
 
 # Increment the version when modify script
-VERSION="1.0.27"
+VERSION="1.0.28"
 
 # ============================================================================
 # WORKTREE STATE MANAGEMENT
@@ -605,6 +605,56 @@ cmd_worktree_regen() {
     wt_info "Done."
 }
 
+# shellcheck disable=SC2004
+cmd_worktree_start() {
+    local branch=${1:-}
+    if [[ -z "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree start <branch>"; fi
+    if ! [[ -f "${WT_STATE_FILE}" ]]; then wt_die "No worktrees found"; fi
+    wt_info "Starting stack for '${branch}'"
+    wt_compose_cmd "${branch}" start
+    local offset
+    offset=$(wt_state_get "${branch}" offset)
+    echo "OpenEMR running at http://localhost:$((8300 + ${offset}))"
+}
+
+cmd_worktree_stop() {
+    local branch=${1:-}
+    if [[ -z "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree stop <branch>"; fi
+    if ! [[ -f "${WT_STATE_FILE}" ]]; then wt_die "No worktrees found"; fi
+    wt_info "Stopping stack for '${branch}'"
+    wt_compose_cmd "${branch}" stop
+}
+
+# Runs an openemr-cmd command against the openemr container of a worktree's
+# compose project. Resolves the container by compose project/service label,
+# then re-invokes this script with -d <container_id> <args...>.
+cmd_worktree_exec() {
+    local branch=${1:-}
+    if [[ -z "${branch}" ]]; then
+        wt_die "Usage: openemr-cmd worktree exec <branch> <openemr-cmd-command> [args...]"
+    fi
+    shift
+    if [[ $# -eq 0 ]]; then
+        wt_die "Usage: openemr-cmd worktree exec <branch> <openemr-cmd-command> [args...]"
+    fi
+    if ! [[ -f "${WT_STATE_FILE}" ]]; then wt_die "No worktrees found"; fi
+    local dir
+    dir=$(wt_state_get "${branch}" dir)
+    if [[ -z "${dir}" ]]; then wt_die "No worktree found for branch '${branch}'"; fi
+    wt_validate_dir "${dir}"
+
+    local slug container_id
+    slug=$(wt_slug "${branch}")
+    container_id=$(docker ps \
+        --filter "label=com.docker.compose.project=openemr-${slug}" \
+        --filter "label=com.docker.compose.service=openemr" \
+        --format "{{.ID}}" | head -n 1)
+    if [[ -z "${container_id}" ]]; then
+        wt_die "OpenEMR container is not running for worktree '${branch}'. Run 'openemr-cmd worktree up ${branch}' or 'openemr-cmd worktree start ${branch}' first."
+    fi
+    exec "$0" -d "${container_id}" "$@"
+}
+
 cmd_worktree() {
     local action=${1:-}
     case "${action}" in
@@ -612,16 +662,22 @@ cmd_worktree() {
         remove) cmd_worktree_remove "${@:2}" ;;
         up)     cmd_worktree_up     "${@:2}" ;;
         down)   cmd_worktree_down   "${@:2}" ;;
+        start)  cmd_worktree_start  "${@:2}" ;;
+        stop)   cmd_worktree_stop   "${@:2}" ;;
+        exec)   cmd_worktree_exec   "${@:2}" ;;
         list)   cmd_worktree_list            ;;
         regen)  cmd_worktree_regen  "${@:2}" ;;
         *)
-            echo "Usage: openemr-cmd worktree <add|remove|up|down|list|regen> [options]"
+            echo "Usage: openemr-cmd worktree <add|remove|up|down|start|stop|exec|list|regen> [options]"
             echo ""
             echo "  add <branch> [-b] [--env easy|easy-light|easy-redis] [--start]"
             echo "                            Create worktree (-b creates new branch, default env: easy)"
             echo "  remove <branch> [--keep-volumes] Remove worktree (volumes deleted by default)"
             echo "  up <branch>               Start Docker stack for worktree"
             echo "  down <branch> [--keep-volumes]  Stop Docker stack for worktree (volumes deleted by default)"
+            echo "  start <branch>            Start stopped containers for worktree (preserves data)"
+            echo "  stop <branch>             Stop running containers for worktree (preserves data)"
+            echo "  exec <branch> <cmd> [args...]   Run an openemr-cmd command against the worktree's openemr container"
             echo "  list                      List all worktrees and status"
             echo "  regen <branch>            Regenerate override/env files"
             echo "  wt                        Alias for worktree"
@@ -1017,6 +1073,9 @@ if [[ $# -eq 0 || "${FIRST_ARG}" = '--help' || "${FIRST_ARG}" = '-h' ]]; then
     echo "  worktree remove <branch> [--keep-volumes] Remove worktree (volumes deleted by default)"
     echo "  worktree up <branch>               Start Docker stack for a worktree"
     echo "  worktree down <branch> [--keep-volumes]  Stop Docker stack (volumes deleted by default)"
+    echo "  worktree start <branch>            Start stopped containers for worktree (preserves data)"
+    echo "  worktree stop <branch>             Stop running containers for worktree (preserves data)"
+    echo "  worktree exec <branch> <cmd> [args...]   Run an openemr-cmd command against the worktree's openemr container"
     echo "  worktree list                      List all worktrees and their running status"
     echo "  worktree regen <branch>            Regenerate override/env files for a worktree"
     echo "  wt                                 Alias for worktree"
