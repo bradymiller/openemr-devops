@@ -18,7 +18,7 @@ set -euo pipefail
 #################################################################################################
 
 # Increment the version when modify script
-VERSION="1.0.28"
+VERSION="1.0.29"
 
 # ============================================================================
 # WORKTREE STATE MANAGEMENT
@@ -665,20 +665,99 @@ cmd_worktree_exec() {
     exec "$0" -d "${container_id}" "$@"
 }
 
+# Switches an existing worktree's env (easy / easy-light / easy-redis).
+# Requires the stack to be fully torn down (status: none) before switching,
+# so the user makes the data decision (down vs down --keep-volumes) explicitly.
+cmd_worktree_set_env() {
+    local branch="" new_env=""
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -*) wt_die "Unknown option: $1" ;;
+            *)
+                if   [[ -z "${branch}"  ]]; then branch=$1
+                elif [[ -z "${new_env}" ]]; then new_env=$1
+                else wt_die "Unexpected argument: $1"
+                fi
+                shift
+                ;;
+        esac
+    done
+    if [[ -z "${branch}" || -z "${new_env}" ]]; then
+        wt_die "Usage: openemr-cmd worktree set-env <branch> <easy|easy-light|easy-redis>"
+    fi
+    if ! [[ -f "${WT_STATE_FILE}" ]]; then wt_die "No worktrees found"; fi
+
+    wt_validate_env "${new_env}"
+
+    local current_env dir offset
+    current_env=$(wt_state_get "${branch}" env)
+    dir=$(wt_state_get "${branch}" dir)
+    offset=$(wt_state_get "${branch}" offset)
+    if [[ -z "${current_env}" || -z "${dir}" || -z "${offset}" ]]; then
+        wt_die "No worktree found for branch '${branch}'"
+    fi
+
+    if [[ "${current_env}" == "${new_env}" ]]; then
+        wt_info "Worktree '${branch}' is already on env '${new_env}'."
+        return 0
+    fi
+
+    wt_validate_dir "${dir}"
+
+    # The new env's compose subdir must exist on this branch (older branches
+    # may predate one of the env variants).
+    local new_compose_subdir
+    new_compose_subdir=$(wt_compose_subdir "${new_env}")
+    if [[ ! -f "${dir}/${new_compose_subdir}/docker-compose.yml" ]]; then
+        wt_die "New env's compose file not found: ${dir}/${new_compose_subdir}/docker-compose.yml. Update the branch to bring in the missing files."
+    fi
+
+    # Require status=none on the current env's stack before switching, so the
+    # user has explicitly chosen what to do with the old env's containers and
+    # volumes (worktree down vs worktree down --keep-volumes).
+    check_docker_compose_install
+    local current_compose_subdir slug ps_all
+    current_compose_subdir=$(wt_compose_subdir "${current_env}")
+    slug=$(wt_slug "${branch}")
+    if [[ -f "${dir}/${current_compose_subdir}/.env" ]] && \
+       [[ -f "${dir}/${current_compose_subdir}/docker-compose.override.yml" ]]; then
+        ps_all=$("${DOCKER_COMPOSE_CMD[@]}" \
+            --env-file "${dir}/${current_compose_subdir}/.env" \
+            -p "openemr-${slug}" \
+            -f "${dir}/${current_compose_subdir}/docker-compose.yml" \
+            -f "${dir}/${current_compose_subdir}/docker-compose.override.yml" \
+            ps -aq 2>/dev/null) || true
+        if [[ -n "${ps_all}" ]]; then
+            wt_die "Stack must be down before switching env. Run 'openemr-cmd worktree down ${branch}' first (use --keep-volumes to preserve data)."
+        fi
+    fi
+
+    wt_info "Switching '${branch}' env: ${current_env} -> ${new_env}"
+    wt_state_set      "${branch}" "${offset}" "${dir}" "${new_env}"
+    wt_write_env      "${dir}" "${branch}" "${offset}" "${new_env}"
+    wt_write_override "${dir}" "${branch}" "${offset}" "${new_env}"
+
+    echo ""
+    echo "Worktree '${branch}' switched to env '${new_env}'"
+    echo "Run 'openemr-cmd worktree up ${branch}' to start with the new env."
+}
+
 cmd_worktree() {
     local action=${1:-}
     case "${action}" in
-        add)    cmd_worktree_add    "${@:2}" ;;
-        remove) cmd_worktree_remove "${@:2}" ;;
-        up)     cmd_worktree_up     "${@:2}" ;;
-        down)   cmd_worktree_down   "${@:2}" ;;
-        start)  cmd_worktree_start  "${@:2}" ;;
-        stop)   cmd_worktree_stop   "${@:2}" ;;
-        exec)   cmd_worktree_exec   "${@:2}" ;;
-        list)   cmd_worktree_list            ;;
-        regen)  cmd_worktree_regen  "${@:2}" ;;
+        add)     cmd_worktree_add     "${@:2}" ;;
+        remove)  cmd_worktree_remove  "${@:2}" ;;
+        up)      cmd_worktree_up      "${@:2}" ;;
+        down)    cmd_worktree_down    "${@:2}" ;;
+        start)   cmd_worktree_start   "${@:2}" ;;
+        stop)    cmd_worktree_stop    "${@:2}" ;;
+        exec)    cmd_worktree_exec    "${@:2}" ;;
+        list)    cmd_worktree_list             ;;
+        regen)   cmd_worktree_regen   "${@:2}" ;;
+        set-env) cmd_worktree_set_env "${@:2}" ;;
         *)
-            echo "Usage: openemr-cmd worktree <add|remove|up|down|start|stop|exec|list|regen> [options]"
+            echo "Usage: openemr-cmd worktree <add|remove|up|down|start|stop|exec|list|regen|set-env> [options]"
             echo ""
             echo "  add <branch> [-b] [--env easy|easy-light|easy-redis] [--start]"
             echo "                            Create worktree (-b creates new branch, default env: easy)"
@@ -687,6 +766,7 @@ cmd_worktree() {
             echo "  down <branch> [--keep-volumes]  Stop Docker stack for worktree (volumes deleted by default)"
             echo "  start <branch>            Start stopped containers for worktree (preserves data)"
             echo "  stop <branch>             Stop running containers for worktree (preserves data)"
+            echo "  set-env <branch> <env>    Switch a worktree's env (easy|easy-light|easy-redis); stack must be down first"
             echo "  exec <branch> <cmd> [args...]   Run an openemr-cmd command against the worktree's openemr container"
             echo "  list                      List all worktrees and status"
             echo "  regen <branch>            Regenerate override/env files"
@@ -1085,6 +1165,7 @@ if [[ $# -eq 0 || "${FIRST_ARG}" = '--help' || "${FIRST_ARG}" = '-h' ]]; then
     echo "  worktree down <branch> [--keep-volumes]  Stop Docker stack (volumes deleted by default)"
     echo "  worktree start <branch>            Start stopped containers for worktree (preserves data)"
     echo "  worktree stop <branch>             Stop running containers for worktree (preserves data)"
+    echo "  worktree set-env <branch> <env>    Switch a worktree's env (easy|easy-light|easy-redis); stack must be down first"
     echo "  worktree exec <branch> <cmd> [args...]   Run an openemr-cmd command against the worktree's openemr container"
     echo "  worktree list                      List all worktrees and their running status"
     echo "  worktree regen <branch>            Regenerate override/env files for a worktree"
