@@ -648,6 +648,15 @@ if [[ "${NEED_COMPOSER_BUILD}" = "true" ]] || [[ "${NEED_NPM_BUILD}" = "true" ]]
 
         # install php dependencies
         if [[ "${DEVELOPER_TOOLS}" = "yes" ]]; then
+            # Disable git's CVE-2022-24765 ownership check inside the
+            # container. The bind-mounted repo is owned by the host user;
+            # when the host UID does not match the container's UID (common
+            # on macOS Docker Desktop, WSL2, and Codespaces), git refuses
+            # to operate without this. Set system-wide so both root (CLI
+            # shells) and apache (runtime processes, npm postinstall hooks
+            # like husky) see it. Idempotent; safe to re-run on every
+            # container start.
+            git config --system --add safe.directory '*'
             composer install
             # install support for the e2e testing
             apk update
