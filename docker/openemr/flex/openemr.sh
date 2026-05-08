@@ -119,6 +119,26 @@ case "${PCOV_ON,,}" in
     *) PCOV_ON=false ;;
 esac
 
+# Disable git's CVE-2022-24765 ownership check for the bind-mounted
+# OpenEMR working tree. When the host UID does not match the container's
+# apache UID (common on macOS Docker Desktop, WSL2, GitHub Codespaces),
+# git refuses to operate without this. Without it, in-container git
+# tooling fails: npm postinstall hooks (husky, lint-staged), prek,
+# composer scripts that read commit metadata, and openemr-cmd commands
+# that shell out to git.
+#
+# Runs unconditionally on every container start, before any code path
+# that might invoke git. Scoped to DEVELOPER_TOOLS=yes only: production
+# images COPY the source rather than bind-mount it, so .git is owned by
+# the container's build user and the ownership check passes naturally.
+#
+# --replace-all (vs --add) so /etc/gitconfig stays stable across restarts;
+# specific path (vs '*') keeps the ownership check intact for any other
+# repos that might exist in the container.
+if [[ "${DEVELOPER_TOOLS}" = "yes" ]]; then
+    git config --system --replace-all safe.directory /var/www/localhost/htdocs/openemr
+fi
+
 auto_setup() {
     prepareVariables
 
@@ -648,15 +668,6 @@ if [[ "${NEED_COMPOSER_BUILD}" = "true" ]] || [[ "${NEED_NPM_BUILD}" = "true" ]]
 
         # install php dependencies
         if [[ "${DEVELOPER_TOOLS}" = "yes" ]]; then
-            # Disable git's CVE-2022-24765 ownership check inside the
-            # container. The bind-mounted repo is owned by the host user;
-            # when the host UID does not match the container's UID (common
-            # on macOS Docker Desktop, WSL2, and Codespaces), git refuses
-            # to operate without this. Set system-wide so both root (CLI
-            # shells) and apache (runtime processes, npm postinstall hooks
-            # like husky) see it. Idempotent; safe to re-run on every
-            # container start.
-            git config --system --add safe.directory '*'
             composer install
             # install support for the e2e testing
             apk update
