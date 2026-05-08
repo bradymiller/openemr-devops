@@ -243,7 +243,9 @@ wt_write_override() {
     fi
 
     # Resolve the primary repo's .git directory. The worktree's own .git is a
-    # text file containing 'gitdir: <absolute-host-path-to-primary-.git/worktrees/<slug>>'.
+    # text file containing 'gitdir: <primary>/.git/worktrees/<wt-dir-basename>',
+    # where <wt-dir-basename> is the basename of the worktree directory (in
+    # this script's naming, "openemr-wt-<slug>") -- not the branch slug alone.
     # Without exposing that absolute path inside the container, any tool that
     # shells out to git (npm postinstall hooks like husky, lint-staged, prek,
     # composer scripts that read commit metadata, etc.) sees a broken pointer
