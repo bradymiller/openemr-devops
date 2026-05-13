@@ -8,7 +8,9 @@
  * Layout assumption: the consumer mirrors the canonical relative paths under
  * its vendored dir. A consumer that vendors to `vendored/openemr-devops/`
  * therefore has `vendored/openemr-devops/contracts/dispatch.schema.json` and
- * `vendored/openemr-devops/src/TagVerifier.php`.
+ * `vendored/openemr-devops/src/TagVerifier.php`. A consumer that vendored
+ * into a different layout (e.g. `src/Release/TagVerifier.php`) can pass a
+ * `$pathOverrides` map keyed by canonical path → consumer-relative path.
  *
  * Equivalence is per-file-type, per the openemr-devops#664 spec:
  *
@@ -44,10 +46,49 @@ final readonly class VendoredFileChecker
         'src/TagVerificationResult.php',
     ];
 
+    /** @var array<string, string> */
+    private array $pathOverrides;
+
+    /**
+     * @param array<array-key, mixed> $pathOverrides Map of canonical relative
+     *     path → consumer relative path. Validated at runtime since CLI/CI
+     *     callers can produce arbitrary input: keys and values must both be
+     *     strings; unmapped entries default to the canonical path; unknown
+     *     keys (not in VENDORED_PATHS) throw, as do values that are absolute
+     *     or contain `..` segments — overrides must stay inside the
+     *     consumer dir.
+     */
     public function __construct(
         private string $canonicalRoot,
         private string $consumerDir,
+        array $pathOverrides = [],
     ) {
+        $validated = [];
+        foreach ($pathOverrides as $key => $value) {
+            if (!is_string($key) || !is_string($value)) {
+                throw new \InvalidArgumentException(sprintf(
+                    'Override entries must be string=>string, got %s=>%s',
+                    get_debug_type($key),
+                    get_debug_type($value),
+                ));
+            }
+            if (!in_array($key, self::VENDORED_PATHS, true)) {
+                throw new \InvalidArgumentException(sprintf(
+                    'Unknown override key %s; must be one of: %s',
+                    $key,
+                    implode(', ', self::VENDORED_PATHS),
+                ));
+            }
+            if ($value === '' || $value[0] === '/' || preg_match('#(^|/)\.\.(/|$)#', $value) === 1) {
+                throw new \InvalidArgumentException(sprintf(
+                    'Override value for %s must be a relative path inside the consumer dir, got: %s',
+                    $key,
+                    $value,
+                ));
+            }
+            $validated[$key] = $value;
+        }
+        $this->pathOverrides = $validated;
     }
 
     /**
@@ -58,7 +99,8 @@ final readonly class VendoredFileChecker
         $issues = [];
         foreach (self::VENDORED_PATHS as $rel) {
             $canonicalAbs = $this->canonicalRoot . '/' . $rel;
-            $consumerAbs = $this->consumerDir . '/' . $rel;
+            $consumerRel = $this->pathOverrides[$rel] ?? $rel;
+            $consumerAbs = $this->consumerDir . '/' . $consumerRel;
 
             if (!is_file($canonicalAbs)) {
                 $issues[] = new VendoredDriftIssue(
@@ -70,7 +112,7 @@ final readonly class VendoredFileChecker
             }
             if (!is_file($consumerAbs)) {
                 $issues[] = new VendoredDriftIssue(
-                    $rel,
+                    $consumerRel,
                     'missing_consumer',
                     'Consumer copy missing — vendor it from canonical at ' . $canonicalAbs,
                 );
@@ -78,7 +120,7 @@ final readonly class VendoredFileChecker
             }
             if (!$this->equivalent($rel, $canonicalAbs, $consumerAbs)) {
                 $issues[] = new VendoredDriftIssue(
-                    $rel,
+                    $consumerRel,
                     'drift',
                     'Consumer copy differs from canonical — re-vendor from ' . $canonicalAbs,
                 );

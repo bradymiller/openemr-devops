@@ -42,6 +42,21 @@ use Symfony\Component\Console\SingleCommandApplication;
         InputOption::VALUE_REQUIRED,
         'Path to the consumer repo dir holding the vendored copies',
     )
+    ->addOption(
+        'override',
+        null,
+        InputOption::VALUE_REQUIRED | InputOption::VALUE_IS_ARRAY,
+        'Map a canonical path to a different consumer-relative path '
+            . '(e.g. --override src/TagVerifier.php=src/Release/TagVerifier.php). Repeatable.',
+    )
+    ->addOption(
+        'overrides',
+        null,
+        InputOption::VALUE_REQUIRED,
+        'Same mapping as --override but as a single newline-delimited string '
+            . '(blank lines and surrounding whitespace ignored). Convenient for '
+            . 'CI inputs that arrive as multi-line strings. Combines with --override.',
+    )
     ->setCode(function (InputInterface $input, OutputInterface $output): int {
         $canonical = $input->getOption('canonical');
         if (!is_string($canonical) || $canonical === '') {
@@ -63,7 +78,48 @@ use Symfony\Component\Console\SingleCommandApplication;
             return 1;
         }
 
-        $issues = (new VendoredFileChecker($canonical, $consumer))->check();
+        $rawOverrides = $input->getOption('override');
+        if (!is_array($rawOverrides)) {
+            $rawOverrides = [];
+        }
+        $multiline = $input->getOption('overrides');
+        if (is_string($multiline) && $multiline !== '') {
+            $lines = preg_split('/\R/', $multiline);
+            if ($lines === false) {
+                $output->writeln('<error>--overrides could not be parsed</error>');
+                return 1;
+            }
+            foreach ($lines as $line) {
+                $trimmed = trim($line);
+                if ($trimmed !== '') {
+                    $rawOverrides[] = $trimmed;
+                }
+            }
+        }
+        $overrides = [];
+        foreach ($rawOverrides as $entry) {
+            if (!is_string($entry) || !str_contains($entry, '=')) {
+                $output->writeln(sprintf(
+                    '<error>override entry expects CANONICAL=CONSUMER, got: %s</error>',
+                    is_string($entry) ? $entry : gettype($entry),
+                ));
+                return 1;
+            }
+            [$canonicalPath, $consumerPath] = explode('=', $entry, 2);
+            if ($canonicalPath === '' || $consumerPath === '') {
+                $output->writeln(sprintf('<error>override entry has empty side: %s</error>', $entry));
+                return 1;
+            }
+            $overrides[$canonicalPath] = $consumerPath;
+        }
+
+        try {
+            $checker = new VendoredFileChecker($canonical, $consumer, $overrides);
+        } catch (\InvalidArgumentException $e) {
+            $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
+            return 1;
+        }
+        $issues = $checker->check();
         if ($issues === []) {
             $output->writeln(sprintf(
                 '<info>✓</info> All %d vendored file(s) match canonical.',
