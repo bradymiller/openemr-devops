@@ -139,6 +139,38 @@ if [[ "${DEVELOPER_TOOLS}" = "yes" ]]; then
     git config --system --replace-all safe.directory /var/www/localhost/htdocs/openemr
 fi
 
+# Install development-only Alpine packages that openemr-cmd subcommands and
+# the e2e test runner depend on:
+#   chromium / chromium-chromedriver  for Symfony Panther (e2e tests)
+#   py3-codespell                     for openemr-cmd cps / cq (codespell)
+#   pre-commit                        for openemr-cmd prek -- the in-container
+#                                     tool is Python's 'pre-commit'; openemr-cmd
+#                                     exposes it under the label 'prek' so the
+#                                     host-side and docker-side CLIs share a name
+#   actionlint                        for the actionlint-system pre-commit hook;
+#                                     openemr-cmd prek substitutes actionlint-docker
+#                                     -> actionlint-system at invocation time
+#                                     because DinD is not available from inside
+#                                     this container
+#
+# Runs at top of script (not inside NEED_COMPOSER_BUILD) because apk packages
+# live in the container's writable rootfs, not in any named volume. A
+# 'docker compose down --keep-volumes && up' recreates the rootfs but
+# preserves vendor (NEED_COMPOSER_BUILD=false), which would otherwise leave
+# these binaries missing in the new container.
+#
+# Idempotent: 'apk info -e' guards short-circuit when everything is already
+# installed. Tolerant of network failures.
+if [[ "${DEVELOPER_TOOLS}" = "yes" ]] && {
+       ! apk info -e chromium             >/dev/null 2>&1 || \
+       ! apk info -e chromium-chromedriver >/dev/null 2>&1 || \
+       ! apk info -e py3-codespell         >/dev/null 2>&1 || \
+       ! apk info -e pre-commit            >/dev/null 2>&1 || \
+       ! apk info -e actionlint            >/dev/null 2>&1; }; then
+    apk add --no-cache chromium chromium-chromedriver py3-codespell pre-commit actionlint \
+        || echo "dev apk packages: install failed; some openemr-cmd subcommands may be unavailable" >&2
+fi
+
 auto_setup() {
     prepareVariables
 
@@ -669,9 +701,6 @@ if [[ "${NEED_COMPOSER_BUILD}" = "true" ]] || [[ "${NEED_NPM_BUILD}" = "true" ]]
         # install php dependencies
         if [[ "${DEVELOPER_TOOLS}" = "yes" ]]; then
             composer install
-            # install support for the e2e testing
-            apk update
-            apk add --no-cache chromium chromium-chromedriver
         else
             composer install --no-dev
         fi

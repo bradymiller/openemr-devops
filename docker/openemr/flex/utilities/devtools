@@ -27,6 +27,14 @@
 #   rector-dry-run              - Preview PHP code modernization changes
 #   rector-process              - Apply PHP code modernization changes
 #   phpstan                     - Run PHPStan static analysis
+#   codespell                   - Run codespell (composer codespell)
+#   conventional-commits-check  - Validate conventional commit messages
+#   require-checker             - Run composer-require-checker
+#   composer-validate           - Validate composer.json (strict)
+#   composer-normalize          - Check composer.json normalization (dry-run)
+#   composer-normalize-fix      - Apply composer.json normalization
+#   composer-checks             - Run composer "checks" (validate + normalize dry-run)
+#   code-quality                - Run full composer "code-quality" suite
 #
 # BUILD & ASSETS:
 #   build-themes            - Build OpenEMR CSS themes
@@ -210,6 +218,54 @@ if [ "$1" = "phpstan-generate" ]; then
     echo "PHPStan regenerate baseline"
     cd /var/www/localhost/htdocs/openemr
     composer phpstan-baseline
+fi
+
+if [ "$1" = "codespell" ] || [ "$1" = "clean-sweep" ]; then
+    echo "Running codespell"
+    cd /var/www/localhost/htdocs/openemr
+    composer codespell
+fi
+
+if [ "$1" = "conventional-commits-check" ] || [ "$1" = "clean-sweep" ]; then
+    echo "Validating conventional commit messages"
+    cd /var/www/localhost/htdocs/openemr
+    composer conventional-commits:check
+fi
+
+if [ "$1" = "require-checker" ] || [ "$1" = "clean-sweep" ]; then
+    echo "Running composer-require-checker"
+    cd /var/www/localhost/htdocs/openemr
+    composer require-checker
+fi
+
+if [ "$1" = "composer-validate" ] || [ "$1" = "clean-sweep" ]; then
+    echo "Validating composer.json (strict)"
+    cd /var/www/localhost/htdocs/openemr
+    composer validate --strict
+fi
+
+if [ "$1" = "composer-normalize" ] || [ "$1" = "clean-sweep" ]; then
+    echo "Checking composer.json normalization"
+    cd /var/www/localhost/htdocs/openemr
+    composer normalize --dry-run
+fi
+
+if [ "$1" = "composer-normalize-fix" ]; then
+    echo "Applying composer.json normalization"
+    cd /var/www/localhost/htdocs/openemr
+    composer normalize
+fi
+
+if [ "$1" = "composer-checks" ]; then
+    echo "Running composer checks (validate + normalize dry-run)"
+    cd /var/www/localhost/htdocs/openemr
+    composer checks
+fi
+
+if [ "$1" = "code-quality" ]; then
+    echo "Running full composer code-quality suite"
+    cd /var/www/localhost/htdocs/openemr
+    composer code-quality
 fi
 
 # ============================================================================
