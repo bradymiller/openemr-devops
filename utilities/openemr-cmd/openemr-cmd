@@ -182,7 +182,7 @@ wt_resolve_container_from_cwd() {
             branch="${b}"
             break
         fi
-    done < <(jq -r 'to_entries[] | [.key, .value.dir] | @tsv' "${WT_STATE_FILE}" 2>/dev/null)
+    done < <(jq -r 'to_entries[] | [.key, .value.dir] | @tsv' "${WT_STATE_FILE}" 2>/dev/null || true)
 
     [[ -n "${branch:-}" ]] || return 0
     slug=$(wt_slug "${branch}")
@@ -882,7 +882,8 @@ prek_write_hook() {
             echo "Use 'openemr-cmd prek-install --force' to back it up and overwrite." >&2
             return 1
         fi
-        local backup="${target}.bak.$(date +%s)"
+        local backup
+        backup="${target}.bak.$(date +%s)"
         mv "${target}" "${backup}"
         echo "  Backed up existing hook to ${backup}"
     fi
@@ -919,12 +920,16 @@ cmd_prek_install() {
     done
 
     wt_require_cmd git realpath
+    # Bare assignments below rely on 'set -euo pipefail' (top of script):
+    # if prek_hooks_dir or prek_write_hook returns non-zero, set -e exits
+    # the script. Avoids SC2310 (using '||' or 'if !' would disable set -e
+    # inside the called function, which we don't want for the helpers).
     local hooks_dir
-    hooks_dir=$(prek_hooks_dir) || exit 1
+    hooks_dir=$(prek_hooks_dir)
     [[ -d "${hooks_dir}" ]] || mkdir -p "${hooks_dir}"
 
-    prek_write_hook "${hooks_dir}/pre-commit"  pre-commit  "${force}" || exit 1
-    prek_write_hook "${hooks_dir}/commit-msg"  commit-msg  "${force}" || exit 1
+    prek_write_hook "${hooks_dir}/pre-commit" pre-commit "${force}"
+    prek_write_hook "${hooks_dir}/commit-msg" commit-msg "${force}"
 
     echo "Installed openemr-cmd-managed git hooks in ${hooks_dir}/"
     echo "  pre-commit  -> openemr-cmd prek run --hook-stage pre-commit"
@@ -943,8 +948,9 @@ cmd_prek_uninstall() {
     done
 
     wt_require_cmd git realpath
+    # Bare assignment relies on 'set -euo pipefail'; see cmd_prek_install.
     local hooks_dir
-    hooks_dir=$(prek_hooks_dir) || exit 1
+    hooks_dir=$(prek_hooks_dir)
 
     local removed=0 skipped=0 hook target
     for hook in pre-commit commit-msg; do
@@ -1904,10 +1910,18 @@ case "${FIRST_ARG}" in
         fi
         docker exec -w /var/www/localhost/htdocs/openemr -i "${prek_target_id}" \
             sh -c '
-                cfg=/tmp/openemr-cmd-pre-commit-config.yaml
                 if [ -f .pre-commit-config.yaml ]; then
+                    # mktemp for the substituted config: a fixed /tmp path would
+                    # race if two prek invocations run concurrently in the same
+                    # container (parallel CI steps, manual run alongside a hook).
+                    cfg=$(mktemp -t openemr-cmd-pre-commit-config.XXXXXX.yaml) \
+                        || { echo "prek: failed to create temp config" >&2 ; exit 1 ; }
+                    trap "rm -f \"${cfg}\"" EXIT INT TERM
                     sed "s/actionlint-docker/actionlint-system/g" .pre-commit-config.yaml > "${cfg}"
-                    exec pre-commit "$@" --config "${cfg}"
+                    # --config must precede the subcommand: pre-commit parses it
+                    # at the top-level parser, not per-subcommand, so trailing
+                    # placement gives "unrecognized arguments".
+                    pre-commit --config "${cfg}" "$@"
                 else
                     exec pre-commit "$@"
                 fi
