@@ -18,7 +18,7 @@ set -euo pipefail
 #################################################################################################
 
 # Increment the version when modify script
-VERSION="1.0.29"
+VERSION="1.0.30"
 
 # ============================================================================
 # WORKTREE STATE MANAGEMENT
@@ -242,6 +242,23 @@ wt_write_override() {
         fi
     fi
 
+    # Resolve the primary repo's .git directory. The worktree's own .git is a
+    # text file containing 'gitdir: <primary>/.git/worktrees/<wt-dir-basename>',
+    # where <wt-dir-basename> is the basename of the worktree directory (in
+    # this script's naming, "openemr-wt-<slug>") -- not the branch slug alone.
+    # Without exposing that absolute path inside the container, any tool that
+    # shells out to git (npm postinstall hooks like husky, lint-staged, prek,
+    # composer scripts that read commit metadata, etc.) sees a broken pointer
+    # and fails. We bind-mount the primary's .git at the same absolute host
+    # path inside the container so the existing pointer resolves transparently.
+    local primary_root_real primary_git_real
+    primary_root_real=$(realpath -e "${OPENEMR_ROOT}") \
+        || wt_die "Cannot resolve OPENEMR_ROOT: '${OPENEMR_ROOT}'"
+    [[ -L "${primary_root_real}/.git" ]] && wt_die "Refusing: '${primary_root_real}/.git' is a symlink"
+    primary_git_real=$(realpath -e "${primary_root_real}/.git") \
+        || wt_die "Cannot resolve primary .git: '${primary_root_real}/.git'"
+    [[ -d "${primary_git_real}" ]] || wt_die "Primary .git is not a directory: '${primary_git_real}'"
+
     local override_file="${dir}/${compose_subdir}/docker-compose.override.yml"
 
     # Header + core volumes (all envs)
@@ -282,11 +299,34 @@ OVEOF
 
     # Core services (all envs).
     # Ports are handled via WT_* variables with defaults in the base compose.
-    # Override only needs: library bind-mount absolute paths (relative paths in
-    # base compose break when compose file is symlinked into a worktree directory).
+    # Override needs:
+    #   1. The primary repo's .git directory bind-mounted at the same absolute
+    #      host path inside the container, so the worktree's .git pointer file
+    #      resolves and host-installed git tooling (husky, lint-staged, prek,
+    #      etc.) sees a valid repo. Mounted RW because git writes refs,
+    #      indexes, packed objects, and the worktree-specific state in
+    #      <primary>/.git/worktrees/<slug>/.
+    #   2. Library bind-mount absolute paths (relative paths in the base
+    #      compose break when the compose file is loaded from a worktree
+    #      checkout that does not match the base compose's own directory).
     cat >> "${override_file}" <<OVEOF
 
 services:
+  openemr:
+    volumes:
+      - "${primary_git_real}:${primary_git_real}:rw"
+OVEOF
+
+    # easy-redis: php.ini is mounted directly into the openemr container.
+    # Append to the openemr service block emitted just above.
+    if [[ "${env}" == "easy-redis" ]]; then
+        cat >> "${override_file}" <<OVEOF
+      - "${env_root}/php.ini:/usr/local/etc/php/php.ini:ro"
+OVEOF
+    fi
+
+    cat >> "${override_file}" <<OVEOF
+
   mysql:
     volumes:
       - "${lib_root}/sql-ssl-certs-keys/easy/ca.pem:/etc/ssl/ca.pem:ro"
@@ -310,13 +350,8 @@ OVEOF
     # Redis-specific overrides.
     # The base compose uses hardcoded container_name which bypasses Docker project
     # namespacing — override with branch-scoped names so multiple worktrees coexist.
-    # Also patch relative ./php.ini path to absolute.
     if [[ "${env}" == "easy-redis" ]]; then
         cat >> "${override_file}" <<OVEOF
-
-  openemr:
-    volumes:
-      - "${env_root}/php.ini:/usr/local/etc/php/php.ini:ro"
 
   redis-master:
     container_name: openemr-${slug}-redis-master
