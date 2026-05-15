@@ -186,10 +186,16 @@ wt_resolve_container_from_cwd() {
 
     [[ -n "${branch:-}" ]] || return 0
     slug=$(wt_slug "${branch}")
+    # 2>/dev/null + '|| true': if the docker daemon is unavailable (laptop
+    # asleep, daemon not started) docker ps would error and propagate up
+    # through 'set -o pipefail', killing the script before the caller can
+    # report a clear "no running openemr container" message. Suppress the
+    # failure here so the caller treats an empty result the same as a clean
+    # "no container found" and emits its own user-facing error.
     docker ps \
         --filter "label=com.docker.compose.project=openemr-${slug}" \
         --filter "label=com.docker.compose.service=openemr" \
-        --format "{{.ID}}" | head -n 1
+        --format "{{.ID}}" 2>/dev/null | head -n 1 || true
 }
 
 # ============================================================================
@@ -873,17 +879,25 @@ prek_hooks_dir() {
 }
 
 # Writes a hook shim to <hooks_dir>/<stage>. Refuses to overwrite an existing
-# non-managed hook unless --force was passed.
+# non-managed hook unless --force was passed. The shim invokes openemr-cmd
+# via the absolute path resolved at install time, since git fires hooks with
+# a reduced PATH (especially from GUI clients) that may not include the user's
+# bin dir.
 prek_write_hook() {
-    local target=$1 stage=$2 force=$3
+    local target=$1 stage=$2 force=$3 cmd_path=$4
     if [[ -e "${target}" ]] && ! grep -q "${PREK_HOOK_MARKER}" "${target}" 2>/dev/null; then
         if [[ "${force}" != "true" ]]; then
             echo "Error: ${target} exists and is not openemr-cmd-managed." >&2
             echo "Use 'openemr-cmd prek-install --force' to back it up and overwrite." >&2
             return 1
         fi
+        # mktemp for the backup name: 'date +%s' is seconds-resolution, so
+        # rapid re-runs of 'prek-install --force' would clobber each other's
+        # backups. mktemp's collision-free suffix avoids that. The empty file
+        # mktemp creates is immediately overwritten by mv.
         local backup
-        backup="${target}.bak.$(date +%s)"
+        backup=$(mktemp "${target}.bak.XXXXXXXX") \
+            || { echo "Error: cannot create backup file for ${target}" >&2 ; return 1 ; }
         mv "${target}" "${backup}"
         echo "  Backed up existing hook to ${backup}"
     fi
@@ -894,7 +908,7 @@ prek_write_hook() {
 #!/bin/sh
 # openemr-cmd-managed commit-msg hook -- do not edit by hand
 # ${PREK_HOOK_MARKER}
-exec openemr-cmd prek run --hook-stage commit-msg --commit-msg-filename "\$1"
+exec "${cmd_path}" prek run --hook-stage commit-msg --commit-msg-filename "\$1"
 HOOKEOF
             ;;
         *)
@@ -902,7 +916,7 @@ HOOKEOF
 #!/bin/sh
 # openemr-cmd-managed pre-commit hook -- do not edit by hand
 # ${PREK_HOOK_MARKER}
-exec openemr-cmd prek run --hook-stage pre-commit
+exec "${cmd_path}" prek run --hook-stage pre-commit
 HOOKEOF
             ;;
     esac
@@ -928,8 +942,19 @@ cmd_prek_install() {
     hooks_dir=$(prek_hooks_dir)
     [[ -d "${hooks_dir}" ]] || mkdir -p "${hooks_dir}"
 
-    prek_write_hook "${hooks_dir}/pre-commit" pre-commit "${force}"
-    prek_write_hook "${hooks_dir}/commit-msg" commit-msg "${force}"
+    # Resolve absolute path to this openemr-cmd script so the hook shim
+    # doesn't depend on git's runtime PATH (which is reduced under many
+    # git clients, especially GUI ones, and may not include ~/bin or
+    # ~/.local/bin where users often install openemr-cmd). Prefer $0
+    # (the path the user invoked) -- this matches what's actually running
+    # right now. Fall back to PATH lookup if $0 cannot be canonicalized.
+    local cmd_path
+    cmd_path=$(realpath -e "$0" 2>/dev/null) \
+        || cmd_path=$(command -v openemr-cmd 2>/dev/null) \
+        || { echo "Error: cannot resolve absolute path to openemr-cmd; pass it explicitly?" >&2 ; exit 1 ; }
+
+    prek_write_hook "${hooks_dir}/pre-commit" pre-commit "${force}" "${cmd_path}"
+    prek_write_hook "${hooks_dir}/commit-msg" commit-msg "${force}" "${cmd_path}"
 
     echo "Installed openemr-cmd-managed git hooks in ${hooks_dir}/"
     echo "  pre-commit  -> openemr-cmd prek run --hook-stage pre-commit"
