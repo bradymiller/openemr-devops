@@ -169,16 +169,15 @@ wt_validate_dir_safe() {
 # of falling through to the script's default detection, which can pick the
 # wrong container when multiple worktree stacks are running concurrently.
 wt_resolve_container_from_cwd() {
-    local toplevel toplevel_real branch slug
+    local toplevel toplevel_real branch slug d_real
     toplevel=$(git rev-parse --show-toplevel 2>/dev/null) || return 0
     toplevel_real=$(realpath -m "${toplevel}" 2>/dev/null) || return 0
     [[ -f "${WT_STATE_FILE}" ]] || return 0
 
     while IFS=$'\t' read -r b d; do
         [[ -z "${b}" ]] && continue
-        local d_real
         d_real=$(realpath -m "${d}" 2>/dev/null) || continue
-        if [[ "${d_real}" == "${toplevel_real}" ]]; then
+        if [[ "${d_real}" = "${toplevel_real}" ]]; then
             branch="${b}"
             break
         fi

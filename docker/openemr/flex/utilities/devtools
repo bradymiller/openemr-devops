@@ -122,6 +122,15 @@
 
 source /root/devtoolsLibrary.source
 
+# Run `composer <args>` from the openemr web root. Lets handlers say what
+# they're doing in one line instead of the cd-then-composer two-step.
+# `cd || exit 1` aborts the script if the webroot is missing rather than
+# silently invoking composer from a wrong cwd (devtools has no `set -e`).
+run_composer_at_root() {
+    cd /var/www/localhost/htdocs/openemr || exit 1
+    composer "$@"
+}
+
 # ============================================================================
 # LOGGING COMMANDS
 # ============================================================================
@@ -222,50 +231,42 @@ fi
 
 if [ "$1" = "codespell" ] || [ "$1" = "clean-sweep" ]; then
     echo "Running codespell"
-    cd /var/www/localhost/htdocs/openemr
-    composer codespell
+    run_composer_at_root codespell
 fi
 
 if [ "$1" = "conventional-commits-check" ] || [ "$1" = "clean-sweep" ]; then
     echo "Validating conventional commit messages"
-    cd /var/www/localhost/htdocs/openemr
-    composer conventional-commits:check
+    run_composer_at_root conventional-commits:check
 fi
 
 if [ "$1" = "require-checker" ] || [ "$1" = "clean-sweep" ]; then
     echo "Running composer-require-checker"
-    cd /var/www/localhost/htdocs/openemr
-    composer require-checker
+    run_composer_at_root require-checker
 fi
 
 if [ "$1" = "composer-validate" ] || [ "$1" = "clean-sweep" ]; then
     echo "Validating composer.json (strict)"
-    cd /var/www/localhost/htdocs/openemr
-    composer validate --strict
+    run_composer_at_root validate --strict
 fi
 
 if [ "$1" = "composer-normalize" ] || [ "$1" = "clean-sweep" ]; then
     echo "Checking composer.json normalization"
-    cd /var/www/localhost/htdocs/openemr
-    composer normalize --dry-run
+    run_composer_at_root normalize --dry-run
 fi
 
 if [ "$1" = "composer-normalize-fix" ]; then
     echo "Applying composer.json normalization"
-    cd /var/www/localhost/htdocs/openemr
-    composer normalize
+    run_composer_at_root normalize
 fi
 
 if [ "$1" = "composer-checks" ]; then
     echo "Running composer checks (validate + normalize dry-run)"
-    cd /var/www/localhost/htdocs/openemr
-    composer checks
+    run_composer_at_root checks
 fi
 
 if [ "$1" = "code-quality" ]; then
     echo "Running full composer code-quality suite"
-    cd /var/www/localhost/htdocs/openemr
-    composer code-quality
+    run_composer_at_root code-quality
 fi
 
 # ============================================================================
