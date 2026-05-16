@@ -122,13 +122,20 @@
 
 source /root/devtoolsLibrary.source
 
-# Run `composer <args>` from the openemr web root. Lets handlers say what
-# they're doing in one line instead of the cd-then-composer two-step.
-# `cd || exit 1` aborts the script if the webroot is missing rather than
-# silently invoking composer from a wrong cwd (devtools has no `set -e`).
-run_composer_at_root() {
+# Run a command from the openemr web root. Lets handlers say what they're
+# doing in one line instead of the cd-then-cmd two-step. `cd || exit 1`
+# aborts the script if the webroot is missing rather than silently invoking
+# from a wrong cwd (devtools has no `set -e`).
+run_at_openemr_root() {
     cd /var/www/localhost/htdocs/openemr || exit 1
-    composer "$@"
+    "$@"
+}
+
+# Composer-specific convenience wrapper; equivalent to
+# `run_at_openemr_root composer "$@"` but reads more naturally for the
+# many composer-based code-quality handlers.
+run_composer_at_root() {
+    run_at_openemr_root composer "$@"
 }
 
 # ============================================================================
@@ -155,119 +162,156 @@ fi
 # ============================================================================
 # CODE QUALITY & STYLING COMMANDS
 # ============================================================================
-if [ "$1" = "psr2-report" ] || [ "$1" = "psr12-report" ]; then
+# Per-task helpers -- one function per handler, so the dispatch table below
+# stays a flat name-to-action mapping and clean-sweep / clean-sweep-tests
+# can list exactly which tasks they compose.
+do_psr12_report() {
     echo "Generating PSR12 code styling error report "
-    cd /var/www/localhost/htdocs/openemr
-    composer phpcs
-fi
+    run_composer_at_root phpcs
+}
 
-if [ "$1" = "psr12-src-report" ]; then
+do_psr12_src_report() {
     echo "Generating strict PSR12 code styling error report for src directory "
-    cd /var/www/localhost/htdocs/openemr
-    composer phpcs -- --standard=PSR12 -d memory_limit=4G -p -n src
-fi
+    run_composer_at_root phpcs -- --standard=PSR12 -d memory_limit=4G -p -n src
+}
 
-if [ "$1" = "lint-themes-report" ]; then
+do_lint_themes_report() {
     echo "Generating lint themes error report "
-    cd /var/www/localhost/htdocs/openemr
-    npm run stylelint
-fi
+    run_at_openemr_root npm run stylelint
+}
 
-if [ "$1" = "lint-javascript-report" ]; then
+do_lint_javascript_report() {
     echo "Generating lint javascript error report "
-    cd /var/www/localhost/htdocs/openemr
-    npm run lint:js
-fi
+    run_at_openemr_root npm run lint:js
+}
 
-if [ "$1" = "psr2-fix" ] ||  [ "$1" = "psr12-fix" ] || [ "$1" = "clean-sweep" ]; then
+do_psr12_fix() {
     echo "Fixing PSR12 code styling errors "
-    cd /var/www/localhost/htdocs/openemr
-    composer phpcbf
-fi
+    run_composer_at_root phpcbf
+}
 
-if [ "$1" = "lint-themes-fix" ] || [ "$1" = "clean-sweep" ]; then
+do_lint_themes_fix() {
     echo "Fixing lint themes errors "
-    cd /var/www/localhost/htdocs/openemr
-    npm run stylelint
-    npm run stylelint-fix
-fi
+    run_at_openemr_root npm run stylelint
+    run_at_openemr_root npm run stylelint-fix
+}
 
-if [ "$1" = "lint-javascript-fix" ] || [ "$1" = "clean-sweep" ]; then
+do_lint_javascript_fix() {
     echo "Fixing lint javascript errors "
-    cd /var/www/localhost/htdocs/openemr
-    npm run lint:js-fix
-fi
+    run_at_openemr_root npm run lint:js-fix
+}
 
-if [ "$1" = "php-parserror" ] || [ "$1" = "clean-sweep" ]; then
+do_php_parserror() {
     echo "Generating PHP parse errors"
-    cd /var/www/localhost/htdocs/openemr
-    find . -type f \( -name "*.php" -or -name "*.inc" \) \( -not -path "./vendor/*" -and -not -path "./node_modules/*" -and -not -path "./ccdaservice/node_modules}/*" \) -exec php -d error_reporting=32767 -l {} \; 2>&1 >&- | grep "^"
-fi
+    run_at_openemr_root sh -c 'find . -type f \( -name "*.php" -or -name "*.inc" \) \( -not -path "./vendor/*" -and -not -path "./node_modules/*" -and -not -path "./ccdaservice/node_modules}/*" \) -exec php -d error_reporting=32767 -l {} \; 2>&1 >&- | grep "^"'
+}
 
-if [ "$1" = "rector-dry-run" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
+do_rector_dry_run() {
     echo "Rector PHP process dry-run changes"
-    cd /var/www/localhost/htdocs/openemr
-    php vendor/bin/rector process --dry-run
-fi
+    run_at_openemr_root php vendor/bin/rector process --dry-run
+}
 
-if [ "$1" = "rector-process" ] || [ "$1" = "clean-sweep" ]; then
+do_rector_process() {
     echo "Rector PHP process changes"
-    cd /var/www/localhost/htdocs/openemr
-    php vendor/bin/rector process
-fi
+    run_at_openemr_root php vendor/bin/rector process
+}
 
-if [ "$1" = "phpstan" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
+do_phpstan() {
     echo "PHPStan diagnose"
-    cd /var/www/localhost/htdocs/openemr
-    php vendor/bin/phpstan --memory-limit=8G diagnose
-    php vendor/bin/phpstan --memory-limit=8G analyze
-fi
+    run_at_openemr_root php vendor/bin/phpstan --memory-limit=8G diagnose
+    run_at_openemr_root php vendor/bin/phpstan --memory-limit=8G analyze
+}
 
-if [ "$1" = "phpstan-generate" ]; then
+do_phpstan_generate() {
     echo "PHPStan regenerate baseline"
-    cd /var/www/localhost/htdocs/openemr
-    composer phpstan-baseline
-fi
+    run_composer_at_root phpstan-baseline
+}
 
-if [ "$1" = "codespell" ] || [ "$1" = "clean-sweep" ]; then
+do_codespell() {
     echo "Running codespell"
     run_composer_at_root codespell
-fi
+}
 
-if [ "$1" = "conventional-commits-check" ] || [ "$1" = "clean-sweep" ]; then
+do_conventional_commits_check() {
     echo "Validating conventional commit messages"
     run_composer_at_root conventional-commits:check
-fi
+}
 
-if [ "$1" = "require-checker" ] || [ "$1" = "clean-sweep" ]; then
+do_require_checker() {
     echo "Running composer-require-checker"
     run_composer_at_root require-checker
-fi
+}
 
-if [ "$1" = "composer-validate" ] || [ "$1" = "clean-sweep" ]; then
+do_composer_validate() {
     echo "Validating composer.json (strict)"
     run_composer_at_root validate --strict
-fi
+}
 
-if [ "$1" = "composer-normalize" ] || [ "$1" = "clean-sweep" ]; then
+do_composer_normalize() {
     echo "Checking composer.json normalization"
     run_composer_at_root normalize --dry-run
-fi
+}
 
-if [ "$1" = "composer-normalize-fix" ]; then
+do_composer_normalize_fix() {
     echo "Applying composer.json normalization"
     run_composer_at_root normalize
-fi
+}
 
-if [ "$1" = "composer-checks" ]; then
+do_composer_checks() {
     echo "Running composer checks (validate + normalize dry-run)"
     run_composer_at_root checks
-fi
+}
 
-if [ "$1" = "code-quality" ]; then
+do_code_quality() {
     echo "Running full composer code-quality suite"
     run_composer_at_root code-quality
-fi
+}
+
+# Dispatch -- one branch per name. clean-sweep and clean-sweep-tests list
+# exactly which tasks from this section they compose (preserving prior
+# cascading-if behavior bit-for-bit). The TESTING COMMANDS section below
+# matches clean-sweep / clean-sweep-tests independently via its own ifs.
+case "$1" in
+    psr2-report|psr12-report)   do_psr12_report ;;
+    psr12-src-report)           do_psr12_src_report ;;
+    lint-themes-report)         do_lint_themes_report ;;
+    lint-javascript-report)     do_lint_javascript_report ;;
+    psr2-fix|psr12-fix)         do_psr12_fix ;;
+    lint-themes-fix)            do_lint_themes_fix ;;
+    lint-javascript-fix)        do_lint_javascript_fix ;;
+    php-parserror)              do_php_parserror ;;
+    rector-dry-run)             do_rector_dry_run ;;
+    rector-process)             do_rector_process ;;
+    phpstan)                    do_phpstan ;;
+    phpstan-generate)           do_phpstan_generate ;;
+    codespell)                  do_codespell ;;
+    conventional-commits-check) do_conventional_commits_check ;;
+    require-checker)            do_require_checker ;;
+    composer-validate)          do_composer_validate ;;
+    composer-normalize)         do_composer_normalize ;;
+    composer-normalize-fix)     do_composer_normalize_fix ;;
+    composer-checks)            do_composer_checks ;;
+    code-quality)               do_code_quality ;;
+    clean-sweep)
+        do_psr12_fix
+        do_lint_themes_fix
+        do_lint_javascript_fix
+        do_php_parserror
+        do_rector_dry_run
+        do_rector_process
+        do_phpstan
+        do_codespell
+        do_conventional_commits_check
+        do_require_checker
+        do_composer_validate
+        do_composer_normalize
+        ;;
+    clean-sweep-tests)
+        do_rector_dry_run
+        do_phpstan
+        ;;
+    *) ;;  # unmatched input falls through to subsequent sections below
+esac
 
 # ============================================================================
 # TESTING COMMANDS
