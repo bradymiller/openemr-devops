@@ -203,7 +203,10 @@ do_lint_javascript_fix() {
 
 do_php_parserror() {
     echo "Generating PHP parse errors"
-    run_at_openemr_root sh -c 'find . -type f \( -name "*.php" -or -name "*.inc" \) \( -not -path "./vendor/*" -and -not -path "./node_modules/*" -and -not -path "./ccdaservice/node_modules}/*" \) -exec php -d error_reporting=32767 -l {} \; 2>&1 >&- | grep "^"'
+    # Fix pre-existing typo: './ccdaservice/node_modules}/*' had a stray '}'
+    # so the exclusion silently never matched, causing php -l to be run on
+    # every .php file under ccdaservice/node_modules. Now correctly excluded.
+    run_at_openemr_root sh -c 'find . -type f \( -name "*.php" -or -name "*.inc" \) \( -not -path "./vendor/*" -and -not -path "./node_modules/*" -and -not -path "./ccdaservice/node_modules/*" \) -exec php -d error_reporting=32767 -l {} \; 2>&1 >&- | grep "^"'
 }
 
 do_rector_dry_run() {

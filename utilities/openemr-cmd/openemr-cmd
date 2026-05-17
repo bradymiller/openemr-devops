@@ -1938,7 +1938,11 @@ case "${FIRST_ARG}" in
                     # mktemp for the substituted config: a fixed /tmp path would
                     # race if two prek invocations run concurrently in the same
                     # container (parallel CI steps, manual run alongside a hook).
-                    cfg=$(mktemp -t openemr-cmd-pre-commit-config.XXXXXX.yaml) \
+                    # Template ends in XXXXXX with no suffix -- BusyBox mktemp
+                    # (Alpine) requires the X-group at the end and rejects a
+                    # trailing extension. pre-commit accepts any filename via
+                    # --config; no .yaml suffix needed.
+                    cfg=$(mktemp /tmp/openemr-cmd-pre-commit-config.XXXXXX) \
                         || { echo "prek: failed to create temp config" >&2 ; exit 1 ; }
                     trap "rm -f \"${cfg}\"" EXIT INT TERM
                     sed "s/actionlint-docker/actionlint-system/g" .pre-commit-config.yaml > "${cfg}"
