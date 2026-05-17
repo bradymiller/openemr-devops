@@ -162,7 +162,7 @@ if [ "$1" = "build-themes" ]; then
 fi
 
 # ============================================================================
-# CODE QUALITY & STYLING COMMANDS
+# CODE QUALITY, STYLING & TESTING COMMANDS
 # ============================================================================
 # Per-task helpers -- one function per handler, so the dispatch table below
 # stays a flat name-to-action mapping and clean-sweep / clean-sweep-tests
@@ -272,10 +272,74 @@ do_code_quality() {
     run_composer_at_root code-quality
 }
 
+do_unit_test() {
+    echo "Running OpenEMR PHP Unit tests"
+    run_at_openemr_root vendor/bin/phpunit --testsuite unit --testdox
+}
+
+do_javascript_unit_test() {
+    echo "Running OpenEMR Javascript Unit tests"
+    run_at_openemr_root npm run test:js
+}
+
+do_jut_reports_build() {
+    echo "Building javascript unit testing reports browser user interface, which can view in web browser at HOST/coverage/js-unit/lcov-report (HOST is the server host, for example http://localhost:8300)"
+    run_at_openemr_root npm run test:js-coverage
+    echo "Done, you can view reports in web browser at HOST/coverage/js-unit/lcov-report (HOST is the server host, for example http://localhost:8300)"
+}
+
+do_api_test() {
+    echo "Running OpenEMR API tests"
+    run_at_openemr_root vendor/bin/phpunit --testsuite api --testdox
+}
+
+do_e2e_test() {
+    echo "Running OpenEMR e2e tests"
+    export PANTHER_NO_SANDBOX=1
+    export PANTHER_CHROME_ARGUMENTS='--disable-dev-shm-usage'
+    export PANTHER_CHROME_DRIVER_BINARY=/usr/lib/chromium/chromedriver
+    run_at_openemr_root vendor/bin/phpunit --testsuite e2e --testdox
+}
+
+do_fixtures_test() {
+    echo "Running OpenEMR Fixture tests"
+    run_at_openemr_root vendor/bin/phpunit --testsuite fixtures --testdox
+}
+
+do_services_test() {
+    echo "Running OpenEMR Service tests"
+    run_at_openemr_root vendor/bin/phpunit --testsuite services --testdox
+}
+
+do_validators_test() {
+    echo "Running OpenEMR Validator tests"
+    run_at_openemr_root vendor/bin/phpunit --testsuite validators --testdox
+}
+
+do_controllers_test() {
+    echo "Running OpenEMR Controller tests"
+    run_at_openemr_root vendor/bin/phpunit --testsuite controllers --testdox
+}
+
+do_common_test() {
+    echo "Running OpenEMR Common tests"
+    run_at_openemr_root vendor/bin/phpunit --testsuite common --testdox
+}
+
+do_phpunit_isolated() {
+    echo "Running OpenEMR PHP isolated tests (no database required)"
+    run_composer_at_root phpunit-isolated
+}
+
+do_update_twig_fixtures() {
+    echo "Regenerating Twig render-test fixtures (mutates fixture files under tests/Tests/Isolated/Common/Twig/fixtures/render/ -- review the diff before committing)"
+    run_composer_at_root update-twig-fixtures
+}
+
 # Dispatch -- one branch per name. clean-sweep and clean-sweep-tests list
-# exactly which tasks from this section they compose (preserving prior
-# cascading-if behavior bit-for-bit). The TESTING COMMANDS section below
-# matches clean-sweep / clean-sweep-tests independently via its own ifs.
+# exactly which tasks from this section they compose, preserving prior
+# cascading-if behavior with one intentional addition: phpunit-isolated
+# now runs as part of both aggregates.
 case "$1" in
     psr2-report|psr12-report)   do_psr12_report ;;
     psr12-src-report)           do_psr12_src_report ;;
@@ -297,6 +361,18 @@ case "$1" in
     composer-normalize-fix)     do_composer_normalize_fix ;;
     composer-checks)            do_composer_checks ;;
     code-quality)               do_code_quality ;;
+    unit-test)                  do_unit_test ;;
+    javascript-unit-test)       do_javascript_unit_test ;;
+    jut-reports-build)          do_jut_reports_build ;;
+    api-test)                   do_api_test ;;
+    e2e-test)                   do_e2e_test ;;
+    fixtures-test)              do_fixtures_test ;;
+    services-test)              do_services_test ;;
+    validators-test)            do_validators_test ;;
+    controllers-test)           do_controllers_test ;;
+    common-test)                do_common_test ;;
+    phpunit-isolated)           do_phpunit_isolated ;;
+    update-twig-fixtures)       do_update_twig_fixtures ;;
     clean-sweep)
         do_psr12_fix
         do_lint_themes_fix
@@ -310,90 +386,33 @@ case "$1" in
         do_require_checker
         do_composer_validate
         do_composer_normalize
+        do_unit_test
+        do_javascript_unit_test
+        do_api_test
+        do_e2e_test
+        do_fixtures_test
+        do_services_test
+        do_validators_test
+        do_controllers_test
+        do_common_test
+        do_phpunit_isolated
         ;;
     clean-sweep-tests)
         do_rector_dry_run
         do_phpstan
+        do_unit_test
+        do_javascript_unit_test
+        do_api_test
+        do_e2e_test
+        do_fixtures_test
+        do_services_test
+        do_validators_test
+        do_controllers_test
+        do_common_test
+        do_phpunit_isolated
         ;;
     *) ;;  # unmatched input falls through to subsequent sections below
 esac
-
-# ============================================================================
-# TESTING COMMANDS
-# ============================================================================
-if [ "$1" = "unit-test" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
-    echo "Running OpenEMR PHP Unit tests"
-    cd /var/www/localhost/htdocs/openemr
-    vendor/bin/phpunit --testsuite unit --testdox
-fi
-
-if [ "$1" = "javascript-unit-test" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
-    echo "Running OpenEMR Javascript Unit tests"
-    cd /var/www/localhost/htdocs/openemr
-    npm run test:js
-fi
-
-if [ "$1" = "jut-reports-build" ]; then
-    echo "Building javascript unit testing reports browser user interface, which can view in web browser at HOST/coverage/js-unit/lcov-report (HOST is the server host, for example http://localhost:8300)"
-    cd /var/www/localhost/htdocs/openemr
-    npm run test:js-coverage
-    echo "Done, you can view reports in web browser at HOST/coverage/js-unit/lcov-report (HOST is the server host, for example http://localhost:8300)"
-fi
-
-if [ "$1" = "api-test" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
-    echo "Running OpenEMR API tests"
-    cd /var/www/localhost/htdocs/openemr
-    vendor/bin/phpunit --testsuite api --testdox
-fi
-
-if [ "$1" = "e2e-test" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
-    echo "Running OpenEMR e2e tests"
-    cd /var/www/localhost/htdocs/openemr
-    export PANTHER_NO_SANDBOX=1
-    export PANTHER_CHROME_ARGUMENTS='--disable-dev-shm-usage'
-    export PANTHER_CHROME_DRIVER_BINARY=/usr/lib/chromium/chromedriver
-    vendor/bin/phpunit --testsuite e2e --testdox
-fi
-
-if [ "$1" = "fixtures-test" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
-    echo "Running OpenEMR Fixture tests"
-    cd /var/www/localhost/htdocs/openemr
-    vendor/bin/phpunit --testsuite fixtures --testdox
-fi
-
-if [ "$1" = "services-test" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
-    echo "Running OpenEMR Service tests"
-    cd /var/www/localhost/htdocs/openemr
-    vendor/bin/phpunit --testsuite services --testdox
-fi
-
-if [ "$1" = "validators-test" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
-    echo "Running OpenEMR Validator tests"
-    cd /var/www/localhost/htdocs/openemr
-    vendor/bin/phpunit --testsuite validators --testdox
-fi
-
-if [ "$1" = "controllers-test" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
-    echo "Running OpenEMR Controller tests"
-    cd /var/www/localhost/htdocs/openemr
-    vendor/bin/phpunit --testsuite controllers --testdox
-fi
-
-if [ "$1" = "common-test" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
-    echo "Running OpenEMR Common tests"
-    cd /var/www/localhost/htdocs/openemr
-    vendor/bin/phpunit --testsuite common --testdox
-fi
-
-if [ "$1" = "phpunit-isolated" ]; then
-    echo "Running OpenEMR PHP isolated tests (no database required)"
-    run_composer_at_root phpunit-isolated
-fi
-
-if [ "$1" = "update-twig-fixtures" ]; then
-    echo "Regenerating Twig render-test fixtures (mutates fixture files under tests/Tests/Isolated/Common/Twig/fixtures/render/ -- review the diff before committing)"
-    run_composer_at_root update-twig-fixtures
-fi
 
 # ============================================================================
 # DEVELOPMENT SETUP COMMANDS
