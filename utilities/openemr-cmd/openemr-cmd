@@ -1456,6 +1456,8 @@ if [[ $# -eq 0 || "${FIRST_ARG}" = '--help' || "${FIRST_ARG}" = '-h' ]]; then
     echo "  vt, validators-test                To run validators testing"
     echo "  ct, controllers-test               To run controllers testing"
     echo "  ctt, common-test                   To run common testing"
+    echo "  pit, phpunit-isolated              To run PHP isolated tests (no DB required)"
+    echo "  utf, update-twig-fixtures          Regenerate Twig render-test fixtures (mutates fixture files; review diff before committing)"
     echo 'sweep-management:'
     echo "  cs, clean-sweep                    To run the entire dev tool suite"
     echo "  cst, clean-sweep-tests             To run only all the automated tests"
@@ -1779,6 +1781,12 @@ case "${FIRST_ARG}" in
         ;;
     ctt)
         run_devtools_in_docker "${CONTAINER_ID}" common-test
+        ;;
+    pit|phpunit-isolated)
+        run_devtools_in_docker "${CONTAINER_ID}" phpunit-isolated
+        ;;
+    utf|update-twig-fixtures)
+        run_devtools_in_docker "${CONTAINER_ID}" update-twig-fixtures
         ;;
     cs)
         run_devtools_in_docker "${CONTAINER_ID}" clean-sweep

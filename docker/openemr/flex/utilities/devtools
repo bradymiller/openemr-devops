@@ -51,6 +51,8 @@
 #   validators-test         - Run validator tests
 #   controllers-test        - Run controller tests
 #   common-test             - Run common tests
+#   phpunit-isolated        - Run PHP isolated tests (no database required)
+#   update-twig-fixtures    - Regenerate Twig render-test fixtures (mutates fixture files; review diff)
 #   clean-sweep             - Run all code quality checks and tests
 #   clean-sweep-tests       - Run all tests only
 #
@@ -381,6 +383,16 @@ if [ "$1" = "common-test" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep
     echo "Running OpenEMR Common tests"
     cd /var/www/localhost/htdocs/openemr
     vendor/bin/phpunit --testsuite common --testdox
+fi
+
+if [ "$1" = "phpunit-isolated" ]; then
+    echo "Running OpenEMR PHP isolated tests (no database required)"
+    run_composer_at_root phpunit-isolated
+fi
+
+if [ "$1" = "update-twig-fixtures" ]; then
+    echo "Regenerating Twig render-test fixtures (mutates fixture files under tests/Tests/Isolated/Common/Twig/fixtures/render/ -- review the diff before committing)"
+    run_composer_at_root update-twig-fixtures
 fi
 
 # ============================================================================
