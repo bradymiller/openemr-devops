@@ -18,7 +18,7 @@ set -euo pipefail
 #################################################################################################
 
 # Increment the version when modify script
-VERSION="1.0.31"
+VERSION="1.0.32"
 
 # ============================================================================
 # WORKTREE STATE MANAGEMENT
@@ -314,6 +314,8 @@ volumes:
     name: openemr-${slug}_nodemodules
   vendordir:
     name: openemr-${slug}_vendor
+  phpstanvolume:
+    name: openemr-${slug}_phpstan
   ccdanodemodules:
     name: openemr-${slug}_ccdanodemodules
   ccdanodemodules2:
