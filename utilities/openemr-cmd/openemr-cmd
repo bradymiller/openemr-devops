@@ -18,7 +18,7 @@ set -euo pipefail
 #################################################################################################
 
 # Increment the version when modify script
-VERSION="1.0.32"
+VERSION="1.0.33"
 
 # ============================================================================
 # WORKTREE STATE MANAGEMENT
@@ -1944,25 +1944,39 @@ case "${FIRST_ARG}" in
         fi
         docker exec -w /var/www/localhost/htdocs/openemr -i "${prek_target_id}" \
             sh -c '
-                if [ -f .pre-commit-config.yaml ]; then
-                    # mktemp for the substituted config: a fixed /tmp path would
-                    # race if two prek invocations run concurrently in the same
-                    # container (parallel CI steps, manual run alongside a hook).
-                    # Template ends in XXXXXX with no suffix -- BusyBox mktemp
-                    # (Alpine) requires the X-group at the end and rejects a
-                    # trailing extension. pre-commit accepts any filename via
-                    # --config; no .yaml suffix needed.
-                    cfg=$(mktemp /tmp/openemr-cmd-pre-commit-config.XXXXXX) \
-                        || { echo "prek: failed to create temp config" >&2 ; exit 1 ; }
-                    trap "rm -f \"${cfg}\"" EXIT INT TERM
-                    sed "s/actionlint-docker/actionlint-system/g" .pre-commit-config.yaml > "${cfg}"
-                    # --config must precede the subcommand: pre-commit parses it
-                    # at the top-level parser, not per-subcommand, so trailing
-                    # placement gives "unrecognized arguments".
-                    pre-commit --config "${cfg}" "$@"
-                else
-                    exec pre-commit "$@"
-                fi
+                # Substitute actionlint-docker -> actionlint-system ONLY for the
+                # subcommands that actually consume .pre-commit-config.yaml to
+                # execute hooks: run + install-hooks. For everything else
+                # (--version, --help, autoupdate, clean, sample-config, etc.)
+                # pass through without touching the config -- those either
+                # don ot read the config at all, or modify it in place (where
+                # operating on a temp copy would be wrong).
+                #
+                # In Python pre-commit, --config is a *per-subcommand* option
+                # (e.g. `pre-commit run --config FILE`), NOT a top-level one.
+                # So the --config flag must come AFTER the subcommand name.
+                case "$1" in
+                    run|install-hooks)
+                        if [ -f .pre-commit-config.yaml ]; then
+                            # mktemp for the substituted config: a fixed /tmp
+                            # path would race if two prek invocations run
+                            # concurrently in the same container. Template
+                            # ends in XXXXXX with no suffix -- BusyBox mktemp
+                            # (Alpine) requires the X-group at the end.
+                            cfg=$(mktemp /tmp/openemr-cmd-pre-commit-config.XXXXXX) \
+                                || { echo "prek: failed to create temp config" >&2 ; exit 1 ; }
+                            trap "rm -f \"${cfg}\"" EXIT INT TERM
+                            sed "s/actionlint-docker/actionlint-system/g" .pre-commit-config.yaml > "${cfg}"
+                            subcmd="$1"; shift
+                            pre-commit "$subcmd" --config "${cfg}" "$@"
+                        else
+                            exec pre-commit "$@"
+                        fi
+                        ;;
+                    *)
+                        exec pre-commit "$@"
+                        ;;
+                esac
             ' sh "$@"
         ;;
     *)
