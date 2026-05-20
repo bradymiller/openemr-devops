@@ -39,10 +39,10 @@ case "${FIRST_ARG}" in
         filter_help_output docker-management 8
         ;;
     php)
-        filter_help_output php-management 9
+        filter_help_output php-management 23
         ;;
     test)
-        filter_help_output test-management 8
+        filter_help_output test-management 12
         ;;
     sweep)
         filter_help_output sweep-management 2
