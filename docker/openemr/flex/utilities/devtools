@@ -387,7 +387,8 @@ case "$1" in
     common-test)                do_common_test ;;
     phpunit-isolated)           do_phpunit_isolated ;;
     update-twig-fixtures)       do_update_twig_fixtures ;;
-    update-layout-field-fixtures) do_update_layout_field_fixtures ;;
+    update-layout-field-fixtures)
+                                do_update_layout_field_fixtures ;;
     clean-sweep)
         do_psr12_fix
         do_lint_themes_fix
