@@ -27,6 +27,8 @@
 #   rector-dry-run              - Preview PHP code modernization changes
 #   rector-process              - Apply PHP code modernization changes
 #   phpstan                     - Run PHPStan static analysis
+#   phpstan-generate            - Regenerate PHPStan baseline from current errors
+#   phpstan-generate-reset      - Wipe and regenerate PHPStan baseline from scratch
 #   codespell                   - Run codespell (composer codespell)
 #   conventional-commits-check  - Validate conventional commit messages
 #   require-checker             - Run composer-require-checker
@@ -52,7 +54,8 @@
 #   controllers-test        - Run controller tests
 #   common-test             - Run common tests
 #   phpunit-isolated        - Run PHP isolated tests (no database required)
-#   update-twig-fixtures    - Regenerate Twig render-test fixtures (mutates fixture files; review diff)
+#   update-twig-fixtures           - Regenerate Twig render-test fixtures (mutates fixture files; review diff)
+#   update-layout-field-fixtures   - Regenerate layout field render-test fixtures (mutates fixture files; review diff)
 #   clean-sweep             - Run all code quality checks and tests
 #   clean-sweep-tests       - Run all tests only
 #
@@ -232,6 +235,11 @@ do_phpstan_generate() {
     run_composer_at_root phpstan-baseline
 }
 
+do_phpstan_generate_reset() {
+    echo "PHPStan wipe and regenerate baseline from scratch (deletes every existing baseline entry first, then rebuilds)"
+    run_composer_at_root phpstan-baseline-reset
+}
+
 do_codespell() {
     echo "Running codespell"
     run_composer_at_root codespell
@@ -336,6 +344,11 @@ do_update_twig_fixtures() {
     run_composer_at_root update-twig-fixtures
 }
 
+do_update_layout_field_fixtures() {
+    echo "Regenerating layout field render-test fixtures (mutates fixture files for FieldRenderingSnapshotTest -- review the diff before committing)"
+    run_composer_at_root update-layout-field-fixtures
+}
+
 # Dispatch -- one branch per name. clean-sweep and clean-sweep-tests list
 # exactly which tasks from this section they compose, preserving prior
 # cascading-if behavior with one intentional addition: phpunit-isolated
@@ -353,6 +366,7 @@ case "$1" in
     rector-process)             do_rector_process ;;
     phpstan)                    do_phpstan ;;
     phpstan-generate)           do_phpstan_generate ;;
+    phpstan-generate-reset)     do_phpstan_generate_reset ;;
     codespell)                  do_codespell ;;
     conventional-commits-check) do_conventional_commits_check ;;
     require-checker)            do_require_checker ;;
@@ -373,6 +387,8 @@ case "$1" in
     common-test)                do_common_test ;;
     phpunit-isolated)           do_phpunit_isolated ;;
     update-twig-fixtures)       do_update_twig_fixtures ;;
+    update-layout-field-fixtures)
+                                do_update_layout_field_fixtures ;;
     clean-sweep)
         do_psr12_fix
         do_lint_themes_fix

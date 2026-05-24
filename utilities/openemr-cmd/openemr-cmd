@@ -18,7 +18,7 @@ set -euo pipefail
 #################################################################################################
 
 # Increment the version when modify script
-VERSION="1.0.33"
+VERSION="1.0.34"
 
 # ============================================================================
 # WORKTREE STATE MANAGEMENT
@@ -1437,6 +1437,7 @@ if [[ $# -eq 0 || "${FIRST_ARG}" = '--help' || "${FIRST_ARG}" = '-h' ]]; then
     echo "  rp, rector-process                 To process Rector changes"
     echo "  pst, phpstan                       To run PHPStan diagnose and analyze"
     echo "  psg, phpstan-generate              To run PHPStan regenerate baseline"
+    echo "  pgr, phpstan-generate-reset        To wipe and regenerate PHPStan baseline from scratch"
     echo "  cps, codespell                     To run codespell (composer codespell)"
     echo "  ccc, conventional-commits-check    To validate conventional commit messages"
     echo "  crc, require-checker               To run composer-require-checker"
@@ -1460,6 +1461,7 @@ if [[ $# -eq 0 || "${FIRST_ARG}" = '--help' || "${FIRST_ARG}" = '-h' ]]; then
     echo "  ctt, common-test                   To run common testing"
     echo "  pit, phpunit-isolated              To run PHP isolated tests (no DB required)"
     echo "  utf, update-twig-fixtures          Regenerate Twig render-test fixtures (mutates fixture files; review diff before committing)"
+    echo "  ulff, update-layout-field-fixtures Regenerate layout field render-test fixtures (mutates fixture files; review diff before committing)"
     echo 'sweep-management:'
     echo "  cs, clean-sweep                    To run the entire dev tool suite"
     echo "  cst, clean-sweep-tests             To run only all the automated tests"
@@ -1730,6 +1732,9 @@ case "${FIRST_ARG}" in
     psg)
         run_devtools_in_docker "${CONTAINER_ID}" phpstan-generate
         ;;
+    pgr|phpstan-generate-reset)
+        run_devtools_in_docker "${CONTAINER_ID}" phpstan-generate-reset
+        ;;
     cps|codespell)
         run_devtools_in_docker "${CONTAINER_ID}" codespell
         ;;
@@ -1789,6 +1794,9 @@ case "${FIRST_ARG}" in
         ;;
     utf|update-twig-fixtures)
         run_devtools_in_docker "${CONTAINER_ID}" update-twig-fixtures
+        ;;
+    ulff|update-layout-field-fixtures)
+        run_devtools_in_docker "${CONTAINER_ID}" update-layout-field-fixtures
         ;;
     cs)
         run_devtools_in_docker "${CONTAINER_ID}" clean-sweep
