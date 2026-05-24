@@ -152,6 +152,12 @@ fi
 #                                     -> actionlint-system at invocation time
 #                                     because DinD is not available from inside
 #                                     this container
+#   php${PHP_VERSION_ABBR}-pdo_sqlite for in-process SQLite via Doctrine DBAL.
+#                                     HolidayServiceTest in the isolated test
+#                                     suite builds an in-memory ':memory:'
+#                                     SQLite connection in setUp; without
+#                                     pdo_sqlite the whole class fatals with
+#                                     'could not find driver' at driver init.
 #
 # Runs at top of script (not inside NEED_COMPOSER_BUILD) because apk packages
 # live in the container's writable rootfs, not in any named volume. A
@@ -162,12 +168,14 @@ fi
 # Idempotent: 'apk info -e' guards short-circuit when everything is already
 # installed. Tolerant of network failures.
 if [[ "${DEVELOPER_TOOLS}" = "yes" ]] && {
-       ! apk info -e chromium             >/dev/null 2>&1 || \
-       ! apk info -e chromium-chromedriver >/dev/null 2>&1 || \
-       ! apk info -e py3-codespell         >/dev/null 2>&1 || \
-       ! apk info -e pre-commit            >/dev/null 2>&1 || \
-       ! apk info -e actionlint            >/dev/null 2>&1; }; then
+       ! apk info -e chromium                                   >/dev/null 2>&1 || \
+       ! apk info -e chromium-chromedriver                      >/dev/null 2>&1 || \
+       ! apk info -e py3-codespell                              >/dev/null 2>&1 || \
+       ! apk info -e pre-commit                                 >/dev/null 2>&1 || \
+       ! apk info -e actionlint                                 >/dev/null 2>&1 || \
+       ! apk info -e "php${PHP_VERSION_ABBR?}-pdo_sqlite"        >/dev/null 2>&1; }; then
     apk add --no-cache chromium chromium-chromedriver py3-codespell pre-commit actionlint \
+        "php${PHP_VERSION_ABBR?}-pdo_sqlite" \
         || echo "dev apk packages: install failed; some openemr-cmd subcommands may be unavailable" >&2
 fi
 
