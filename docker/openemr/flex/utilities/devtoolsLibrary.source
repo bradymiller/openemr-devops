@@ -36,6 +36,24 @@
   "${SQL_DATA_DRIVE:=}"
 
 # ============================================================================
+# PRIVILEGE-DROP HELPER
+# ============================================================================
+# Drop privileges to apache and run the given command. OpenEMR's
+# RootCliGuard (openemr#12267) refuses root for any script that loads
+# interface/globals.php or runs through bin/console — invoking those
+# as root would create root-owned files the web server later cannot
+# read, the same failure mode the guard exists to catch. Use this
+# wrapper for any `php <openemr-script>` or `php bin/console …`
+# invocation.
+#
+# Args are joined with spaces and passed to `su -c` as a single shell
+# command string. Callers should pre-quote any value that may contain
+# spaces. `-p` preserves the env so MYSQL_HOST, PATH, etc. propagate.
+run_php_as_apache() {
+    su -p -s /bin/sh apache -c "$*"
+}
+
+# ============================================================================
 # CONFIGURATION PREPARATION
 # ============================================================================
 
@@ -177,7 +195,7 @@ resetOpenemr() {
 installOpenemr() {
     echo "Re-installing OpenEMR"
     cp /root/auto_configure.php /var/www/localhost/htdocs/
-    php /var/www/localhost/htdocs/auto_configure.php -f "${CONFIGURATION}"
+    run_php_as_apache "php /var/www/localhost/htdocs/auto_configure.php -f \"${CONFIGURATION}\""
     rm -f /var/www/localhost/htdocs/auto_configure.php
     gitAddSafeDirectory
 }
@@ -214,7 +232,7 @@ demoData() {
 #
 # Must call prepareVariables() before calling this function.
 upgradeOpenEMR() {
-    php -f /var/www/localhost/htdocs/openemr/sql_upgrade.php -- --from="${1}"
+    run_php_as_apache "php -f /var/www/localhost/htdocs/openemr/sql_upgrade.php -- --from=\"${1}\""
 }
 
 # ============================================================================
@@ -499,7 +517,7 @@ importRandomPatients() {
     )
     sed -i "s@exit;@//exit;@" /var/www/localhost/htdocs/openemr/contrib/util/ccda_import/import_ccda.php
     export OPENEMR_ENABLE_CCDA_IMPORT=1
-    php /var/www/localhost/htdocs/openemr/contrib/util/ccda_import/import_ccda.php --sourcePath=/root/synthea/output/ccda --site=default --openemrPath=/var/www/localhost/htdocs/openemr --isDev="${2}"
+    run_php_as_apache "php /var/www/localhost/htdocs/openemr/contrib/util/ccda_import/import_ccda.php --sourcePath=/root/synthea/output/ccda --site=default --openemrPath=/var/www/localhost/htdocs/openemr --isDev=\"${2}\""
     sed -i "s@//exit;@exit;@" /var/www/localhost/htdocs/openemr/contrib/util/ccda_import/import_ccda.php
     echo "Completed run for following number of random patients: ${1}"
 }
@@ -538,7 +556,7 @@ generateMultisiteBank() {
         rm -fr "/var/www/localhost/htdocs/openemr/sites/${run}"
         rm /tmp/setup_dump.sql
         echo "adding ${run} multisite"
-        php /var/www/localhost/htdocs/openemr/contrib/util/installScripts/InstallerAuto.php rootpass="${MYSQL_ROOT_PASS}" server="${MYSQL_HOST}" port="${CUSTOM_PORT}" loginhost=% "login=${run}" "pass=${run}" "dbname=${run}" "site=${run}" source_site_id=default clone_database=yes
+        run_php_as_apache "php /var/www/localhost/htdocs/openemr/contrib/util/installScripts/InstallerAuto.php rootpass=\"${MYSQL_ROOT_PASS}\" server=\"${MYSQL_HOST}\" port=\"${CUSTOM_PORT}\" loginhost=% login=\"${run}\" pass=\"${run}\" dbname=\"${run}\" site=\"${run}\" source_site_id=default clone_database=yes"
         chown -R apache "/var/www/localhost/htdocs/openemr/sites/${run}"
         # shellcheck disable=SC2312  # xargs may return non-zero if find produces no output, but that's acceptable
         find "/var/www/localhost/htdocs/openemr/sites/${run}" -type d -print0 | xargs -0 chmod 500
