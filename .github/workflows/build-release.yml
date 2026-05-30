@@ -159,15 +159,22 @@ jobs:
         MODE=full
         OPENEMR_DIR='${{ env.OPENEMR_DIR }}'
 
-    - name: Commit and push version changes
-      if: "!inputs.dry_run && steps.detect-prep.outputs.prep_done != 'true'"
+    # Commit the bump locally in every run (dry included) so the package build's
+    # `git archive HEAD` ships the exact bumped tree. The push to the release
+    # branch is gated on a real release below.
+    - name: Commit version changes
+      if: "steps.detect-prep.outputs.prep_done != 'true'"
       working-directory: openemr
       run: |
         git config user.name 'github-actions[bot]'
         git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
         git add version.php library/globals.inc.php
         git commit -m 'chore: prepare ${{ inputs.version }} for release'
-        git push origin HEAD:'${{ inputs.version_branch }}'
+
+    - name: Push version changes
+      if: "!inputs.dry_run && steps.detect-prep.outputs.prep_done != 'true'"
+      working-directory: openemr
+      run: git push origin HEAD:'${{ inputs.version_branch }}'
 
     - name: Generate changelog
       working-directory: devops-tools
@@ -178,6 +185,27 @@ jobs:
         BASE_REF='${{ inputs.base_ref }}'
         HEAD_REF='${{ inputs.version_branch }}'
         TITLE='${{ inputs.version }}'
+
+    # Build and checksum the package before creating the tag/release. If any
+    # build step fails, the job aborts before a release exists — never publish
+    # a release that has no distribution assets attached.
+    - name: Setup Node
+      uses: actions/setup-node@v6
+      with:
+        node-version: '24'
+
+    - name: Build distribution package
+      working-directory: devops-tools
+      run: >-
+        task release:package:assemble
+        VERSION='${{ inputs.version }}'
+        OPENEMR_DIR='${{ env.OPENEMR_DIR }}'
+
+    - name: Generate checksums
+      working-directory: devops-tools
+      run: |
+        task release:checksum FILE="openemr-${{ inputs.version }}.tar.gz"
+        task release:checksum FILE="openemr-${{ inputs.version }}.zip"
 
     - name: Create annotated tag and GitHub release
       if: '!inputs.dry_run'
@@ -227,29 +255,7 @@ jobs:
             --verify-tag
         fi
 
-    - name: Download source archives and generate checksums
-      if: '!inputs.dry_run'
-      env:
-        GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
-      run: |
-        tag='${{ inputs.release_tag }}'
-        output_dir='${{ env.DEVOPS_DIR }}/tools/release/release-output'
-
-        gh release download "$tag" \
-          --repo openemr/openemr \
-          --pattern '*.tar.gz' \
-          --pattern '*.zip' \
-          --dir "$output_dir"
-
-        cd "$output_dir"
-        for archive in *.tar.gz *.zip; do
-          [ -f "$archive" ] || continue
-          md5sum "$archive" > "${archive}.md5"
-          sha256sum "$archive" > "${archive}.sha256"
-          sha512sum "$archive" > "${archive}.sha512"
-        done
-
-    - name: Upload checksums to release
+    - name: Upload package and checksums to release
       if: '!inputs.dry_run'
       env:
         GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
@@ -260,6 +266,8 @@ jobs:
         gh release upload "$tag" \
           --repo openemr/openemr \
           --clobber \
+          "${output_dir}/openemr-${{ inputs.version }}.tar.gz" \
+          "${output_dir}/openemr-${{ inputs.version }}.zip" \
           "${output_dir}"/*.md5 \
           "${output_dir}"/*.sha256 \
           "${output_dir}"/*.sha512 \
@@ -275,13 +283,16 @@ jobs:
         RELEASE_TAG='${{ inputs.release_tag }}'
         DRY_RUN='${{ inputs.dry_run }}'
 
-    - name: Upload changelog artifact (dry run)
+    - name: Upload artifacts (dry run)
       if: inputs.dry_run
       uses: actions/upload-artifact@v7
       with:
         name: release-${{ inputs.version }}
         path: |
           ${{ env.TOOLS_DIR }}/release-output/changelog.md
+          ${{ env.TOOLS_DIR }}/release-output/*.md5
+          ${{ env.TOOLS_DIR }}/release-output/*.sha256
+          ${{ env.TOOLS_DIR }}/release-output/*.sha512
         retention-days: 7
 
     - name: Create CHANGELOG PRs
