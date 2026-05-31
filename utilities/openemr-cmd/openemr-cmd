@@ -18,7 +18,7 @@ set -euo pipefail
 #################################################################################################
 
 # Increment the version when modify script
-VERSION="1.0.34"
+VERSION="1.0.35"
 
 # ============================================================================
 # WORKTREE STATE MANAGEMENT
@@ -638,7 +638,7 @@ cmd_worktree_list() {
         compose_subdir=$(wt_compose_subdir "${env}")
         slug=$(wt_slug "${branch}")
         local validate_result=0
-        wt_validate_dir_safe "${dir}"; validate_result=$?
+        wt_validate_dir_safe "${dir}" || validate_result=$?
         if [[ ! -d "${dir}" ]] || \
            [[ ! -f "${dir}/${compose_subdir}/.env" ]] || \
            [[ ! -f "${dir}/${compose_subdir}/docker-compose.override.yml" ]]; then
