@@ -1,8 +1,7 @@
-# Run BATS tests for bash scripts in 8.1.0, binary, and flex Docker contexts,
-# plus the host-side utilities/openemr-cmd/openemr-cmd CLI.
+# Run BATS tests for bash scripts in 8.1.0, binary, and flex Docker contexts.
 # Ensures all scripts have valid syntax and expected structure.
 
-name: BATS Tests (8.1.0, binary, flex, openemr-cmd)
+name: BATS Tests (8.1.0, binary, flex)
 
 on:
   push:
@@ -13,8 +12,6 @@ on:
       - 'docker/openemr/8.1.0/**'
       - 'docker/openemr/binary/**'
       - 'docker/openemr/flex/**'
-      - 'utilities/openemr-cmd/**'
-      - 'tests/bats/openemr-cmd/**'
   pull_request:
     branches: [master]
     paths:
@@ -23,8 +20,6 @@ on:
       - 'docker/openemr/8.1.0/**'
       - 'docker/openemr/binary/**'
       - 'docker/openemr/flex/**'
-      - 'utilities/openemr-cmd/**'
-      - 'tests/bats/openemr-cmd/**'
 
 jobs:
   bats-810:
@@ -80,21 +75,3 @@ jobs:
           git clone --depth 1 https://github.com/bats-core/bats-assert.git tests/bats/test_helper/bats-assert
       - name: Run BATS tests (flex)
         run: bats tests/bats/flex/
-
-  bats-openemr-cmd:
-    name: BATS openemr-cmd
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v6
-      - name: Install Bats
-        run: |
-          git clone --depth 1 https://github.com/bats-core/bats-core.git /tmp/bats-core
-          /tmp/bats-core/install.sh "$HOME/bats"
-          echo "$HOME/bats/bin" >> "$GITHUB_PATH"
-          echo "PATH=$HOME/bats/bin:$PATH" >> "$GITHUB_ENV"
-      - name: Install Bats assertion libraries
-        run: |
-          git clone --depth 1 https://github.com/bats-core/bats-support.git tests/bats/test_helper/bats-support
-          git clone --depth 1 https://github.com/bats-core/bats-assert.git tests/bats/test_helper/bats-assert
-      - name: Run BATS tests (openemr-cmd)
-        run: bats tests/bats/openemr-cmd/

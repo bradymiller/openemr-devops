@@ -30,15 +30,15 @@ teardown() {
     expected=$(grep -E '^VERSION=' "$SCRIPT" | head -1 | sed -E 's/^VERSION="([^"]+)".*/\1/')
     [[ -n "$expected" ]]
     run env PATH="${STUB_DIR}:$PATH" "$SCRIPT" --version
-    [[ "$status" -eq 14 ]]
     assert_output "openemr-cmd ${expected}"
+    [[ "$status" -eq 14 ]]
 }
 
 @test "openemr-cmd -v is equivalent to --version" {
     expected=$(grep -E '^VERSION=' "$SCRIPT" | head -1 | sed -E 's/^VERSION="([^"]+)".*/\1/')
     run env PATH="${STUB_DIR}:$PATH" "$SCRIPT" -v
-    [[ "$status" -eq 14 ]]
     assert_output "openemr-cmd ${expected}"
+    [[ "$status" -eq 14 ]]
 }
 
 # --- worktree subcommand dispatch -------------------------------------------
@@ -48,8 +48,8 @@ teardown() {
         OPENEMR_ROOT="${TMP_ROOT}" \
         WORKTREE_PARENT="$(dirname "${TMP_ROOT}")" \
         "$SCRIPT" worktree
-    [[ "$status" -ne 0 ]]
     assert_output --partial "Usage: openemr-cmd worktree"
+    [[ "$status" -ne 0 ]]
 }
 
 @test "openemr-cmd wt (alias, no subcommand) prints usage and exits non-zero" {
@@ -57,8 +57,8 @@ teardown() {
         OPENEMR_ROOT="${TMP_ROOT}" \
         WORKTREE_PARENT="$(dirname "${TMP_ROOT}")" \
         "$SCRIPT" wt
-    [[ "$status" -ne 0 ]]
     assert_output --partial "Usage: openemr-cmd worktree"
+    [[ "$status" -ne 0 ]]
 }
 
 # --- worktree list empty cases ---------------------------------------------

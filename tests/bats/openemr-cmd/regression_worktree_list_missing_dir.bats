@@ -16,8 +16,11 @@ setup() {
     SCRIPT="$(oc_script_path)"
     [[ -x "$SCRIPT" ]] || skip "openemr-cmd script not found"
 
-    TMP_OPENEMR_ROOT=$(oc_mktempdir)
-    TMP_WT_PARENT=$(dirname "${TMP_OPENEMR_ROOT}")
+    # Per-test scratch parent so fixed-name subdirs (e.g. 'present-but-incomplete')
+    # cannot collide between concurrent test runs.
+    TMP_WT_PARENT=$(oc_mktempdir)
+    TMP_OPENEMR_ROOT="${TMP_WT_PARENT}/repo"
+    mkdir -p "${TMP_OPENEMR_ROOT}"
     STUB_DIR=$(oc_make_docker_stub_dir)
 
     # OPENEMR_ROOT must be a real git repo: cmd_worktree_list calls
@@ -36,8 +39,9 @@ JSON
 }
 
 teardown() {
-    [[ -n "${TMP_OPENEMR_ROOT:-}" ]] && rm -rf "${TMP_OPENEMR_ROOT}"
-    [[ -n "${STUB_DIR:-}" ]]        && rm -rf "${STUB_DIR}"
+    # TMP_WT_PARENT now contains TMP_OPENEMR_ROOT plus any fixture subdirs.
+    [[ -n "${TMP_WT_PARENT:-}" ]] && rm -rf "${TMP_WT_PARENT}"
+    [[ -n "${STUB_DIR:-}" ]]      && rm -rf "${STUB_DIR}"
 }
 
 @test "regression(028d9b7): worktree list prints all entries even when a dir is deleted" {
@@ -62,8 +66,10 @@ teardown() {
     # Each branch row must include 'missing' as its status column.
     # Use grep to confirm both rows independently — assert_output --partial
     # only proves the string appears somewhere.
-    echo "$output" | grep -E '^feature/alpha[[:space:]]+easy[[:space:]]+1[[:space:]]+missing[[:space:]]'
-    echo "$output" | grep -E '^feature/beta[[:space:]]+easy-light[[:space:]]+2[[:space:]]+missing[[:space:]]'
+    echo "$output" | grep -E '^feature/alpha[[:space:]]+easy[[:space:]]+1[[:space:]]+missing[[:space:]]' \
+        || fail "expected 'feature/alpha easy 1 missing' row not found in output"
+    echo "$output" | grep -E '^feature/beta[[:space:]]+easy-light[[:space:]]+2[[:space:]]+missing[[:space:]]' \
+        || fail "expected 'feature/beta easy-light 2 missing' row not found in output"
 }
 
 @test "regression(028d9b7): worktree list exits 0 with mixed present+missing entries" {
@@ -89,6 +95,4 @@ JSON
     assert_output --partial "feature/alpha"
     assert_output --partial "feature/present"
     assert_output --partial "feature/beta"
-
-    rm -rf "${TMP_WT_PARENT}/present-but-incomplete"
 }
