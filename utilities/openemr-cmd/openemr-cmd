@@ -554,9 +554,13 @@ cmd_worktree_remove() {
     # not a registered worktree, etc.) keep the existing fatal behavior, since
     # that might be in-progress user work we should not silently abandon.
     if [[ ! -e "${dir}" ]]; then
+        local slug
+        slug=$(wt_slug "${branch}")
         wt_state_remove "${branch}"
         git -C "${OPENEMR_ROOT}" worktree prune 2>/dev/null || true
         wt_info "Worktree dir was already gone; cleaned up state entry for '${branch}'."
+        wt_info "Note: docker resources (containers, volumes) for this stack may still exist."
+        wt_info "  Clean them manually: docker compose -p openemr-${slug} down -v"
         return 0
     fi
 
@@ -847,7 +851,7 @@ cmd_worktree_prune() {
         esac
     done
 
-    wt_require_cmd jq
+    wt_require_cmd jq git realpath
     wt_init_state
 
     local state_content
@@ -877,6 +881,14 @@ cmd_worktree_prune() {
             pruned=$((pruned + 1))
         fi
     done <<< "${jq_output}"
+
+    # Keep git's internal worktree admin in sync with what we just removed from
+    # state. Without this, 'git worktree list --porcelain' may still report the
+    # removed worktrees as prunable, which can block a later 'worktree add' of
+    # the same branch.
+    if ! ${dry_run} && [[ "${pruned}" -gt 0 ]]; then
+        git -C "${OPENEMR_ROOT}" worktree prune 2>/dev/null || true
+    fi
 
     if [[ "${pruned}" -eq 0 ]]; then
         echo "(no stale entries)"
