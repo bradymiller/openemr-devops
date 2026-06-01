@@ -18,7 +18,7 @@ set -euo pipefail
 #################################################################################################
 
 # Increment the version when modify script
-VERSION="1.0.35"
+VERSION="1.0.36"
 
 # ============================================================================
 # WORKTREE STATE MANAGEMENT
@@ -548,6 +548,18 @@ cmd_worktree_remove() {
     dir=$(wt_state_get "${branch}" dir)
     if [[ -z "${dir}" ]]; then wt_die "No worktree found for branch '${branch}'"; fi
 
+    # If the dir is already gone (deleted out-of-band), skip the destructive
+    # steps and just clean up the state entry. Only the "missing" case is
+    # graceful here — for dirs that exist but fail validation (outside parent,
+    # not a registered worktree, etc.) keep the existing fatal behavior, since
+    # that might be in-progress user work we should not silently abandon.
+    if [[ ! -e "${dir}" ]]; then
+        wt_state_remove "${branch}"
+        git -C "${OPENEMR_ROOT}" worktree prune 2>/dev/null || true
+        wt_info "Worktree dir was already gone; cleaned up state entry for '${branch}'."
+        return 0
+    fi
+
     echo "This will remove worktree '${branch}' at ${dir}."
     if ! ${purge}; then echo "  --keep-volumes: Docker volumes will be preserved."; fi
     read -rp "Continue? [y/N] " confirm
@@ -632,6 +644,7 @@ cmd_worktree_list() {
     fi
 
     check_docker_compose_install
+    local stale_count=0
     jq_output=$(jq -r 'to_entries[] | [.key, (.value.offset|tostring), .value.dir, .value.env] | @tsv' "${WT_STATE_FILE}")
     while IFS=$'\t' read -r branch offset dir env; do
         status="none"
@@ -646,8 +659,10 @@ cmd_worktree_list() {
            [[ ! -f "${dir}/${compose_subdir}/.env" ]] || \
            [[ ! -f "${dir}/${compose_subdir}/docker-compose.override.yml" ]]; then
             status="missing"
+            stale_count=$((stale_count + 1))
         elif [[ "${validate_result}" -ne 0 ]]; then
             status="invalid"
+            stale_count=$((stale_count + 1))
         else
             ps_running=$("${DOCKER_COMPOSE_CMD[@]}" \
                 --env-file "${dir}/${compose_subdir}/.env" \
@@ -671,6 +686,10 @@ cmd_worktree_list() {
         fi
         printf "%-30s %-12s %-8s %-10s %s\n" "${branch}" "${env}" "${offset}" "${status}" "${dir}"
     done <<< "${jq_output}"
+
+    if [[ "${stale_count}" -gt 0 ]]; then
+        echo "(${stale_count} stale entries detected — run \"openemr-cmd worktree prune\" to clean up)"
+    fi
 }
 
 cmd_worktree_regen() {
@@ -818,6 +837,56 @@ cmd_worktree_set_env() {
     echo "Run 'openemr-cmd worktree up ${branch}' to start with the new env."
 }
 
+cmd_worktree_prune() {
+    local dry_run=false
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --dry-run) dry_run=true; shift ;;
+            -*) wt_die "Unknown option: $1" ;;
+            *)  wt_die "Unexpected argument: $1" ;;
+        esac
+    done
+
+    wt_require_cmd jq
+    wt_init_state
+
+    local state_content
+    state_content=$(cat "${WT_STATE_FILE}")
+    if [[ "${state_content}" == "{}" ]]; then
+        echo "(no stale entries)"
+        return 0
+    fi
+
+    local jq_output pruned=0 validate_result
+    jq_output=$(jq -r 'to_entries[] | [.key, .value.dir] | @tsv' "${WT_STATE_FILE}")
+    while IFS=$'\t' read -r branch dir; do
+        [[ -z "${branch}" ]] && continue
+        # set +e around wt_validate_dir_safe so a non-zero return (the
+        # whole point of the "safe" variant) does not abort under set -e.
+        set +e
+        wt_validate_dir_safe "${dir}"
+        validate_result=$?
+        set -e
+        if [[ "${validate_result}" -ne 0 ]]; then
+            if ${dry_run}; then
+                wt_info "Would prune stale entry: '${branch}' (${dir})"
+            else
+                wt_state_remove "${branch}"
+                wt_info "Pruned stale entry: '${branch}' (${dir})"
+            fi
+            pruned=$((pruned + 1))
+        fi
+    done <<< "${jq_output}"
+
+    if [[ "${pruned}" -eq 0 ]]; then
+        echo "(no stale entries)"
+    elif ${dry_run}; then
+        echo "Would prune ${pruned} stale worktree entries."
+    else
+        echo "Pruned ${pruned} stale worktree entries."
+    fi
+}
+
 cmd_worktree() {
     local action=${1:-}
     case "${action}" in
@@ -831,8 +900,9 @@ cmd_worktree() {
         list)    cmd_worktree_list             ;;
         regen)   cmd_worktree_regen   "${@:2}" ;;
         set-env) cmd_worktree_set_env "${@:2}" ;;
+        prune)   cmd_worktree_prune   "${@:2}" ;;
         *)
-            echo "Usage: openemr-cmd worktree <add|remove|up|down|start|stop|exec|list|regen|set-env> [options]"
+            echo "Usage: openemr-cmd worktree <add|remove|up|down|start|stop|exec|list|regen|set-env|prune> [options]"
             echo ""
             echo "  add <branch> [-b] [--env easy|easy-light|easy-redis] [--start]"
             echo "                            Create worktree (-b creates new branch, default env: easy)"
@@ -845,6 +915,7 @@ cmd_worktree() {
             echo "  exec <branch> <cmd> [args...]   Run an openemr-cmd command against the worktree's openemr container"
             echo "  list                      List all worktrees and status"
             echo "  regen <branch>            Regenerate override/env files"
+            echo "  prune [--dry-run]         Remove state entries whose worktree dir is gone or invalid"
             echo "  wt                        Alias for worktree"
             exit 1
             ;;
@@ -1405,6 +1476,7 @@ if [[ $# -eq 0 || "${FIRST_ARG}" = '--help' || "${FIRST_ARG}" = '-h' ]]; then
     echo "  worktree exec <branch> <cmd> [args...]   Run an openemr-cmd command against the worktree's openemr container"
     echo "  worktree list                      List all worktrees and their running status"
     echo "  worktree regen <branch>            Regenerate override/env files for a worktree"
+    echo "  worktree prune [--dry-run]         Remove state entries whose worktree dir is gone or invalid"
     echo "  wt                                 Alias for worktree"
     echo 'docker-management:'
     echo "  up                                 Execute: docker-compose up -d"
