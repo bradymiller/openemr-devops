@@ -18,7 +18,7 @@ set -euo pipefail
 #################################################################################################
 
 # Increment the version when modify script
-VERSION="1.0.36"
+VERSION="1.0.37"
 
 # ============================================================================
 # WORKTREE STATE MANAGEMENT
@@ -648,7 +648,7 @@ cmd_worktree_list() {
     fi
 
     check_docker_compose_install
-    local stale_count=0
+    local stale_count=0 partial_count=0
     jq_output=$(jq -r 'to_entries[] | [.key, (.value.offset|tostring), .value.dir, .value.env] | @tsv' "${WT_STATE_FILE}")
     while IFS=$'\t' read -r branch offset dir env; do
         status="none"
@@ -659,11 +659,19 @@ cmd_worktree_list() {
         wt_validate_dir_safe "${dir}"
         validate_result=$?
         set -e
-        if [[ ! -d "${dir}" ]] || \
-           [[ ! -f "${dir}/${compose_subdir}/.env" ]] || \
-           [[ ! -f "${dir}/${compose_subdir}/docker-compose.override.yml" ]]; then
+        # Split between "dir gone" (prunable), "compose files gone but dir
+        # intact" (regen-able), and "validate failed" (prunable). Earlier
+        # versions lumped all three under "missing" and suggested prune for
+        # all of them, but prune only removes state entries that
+        # wt_validate_dir_safe rejects — the compose-files-missing case
+        # validates fine and stays put after prune.
+        if [[ ! -d "${dir}" ]]; then
             status="missing"
             stale_count=$((stale_count + 1))
+        elif [[ ! -f "${dir}/${compose_subdir}/.env" ]] || \
+             [[ ! -f "${dir}/${compose_subdir}/docker-compose.override.yml" ]]; then
+            status="partial"
+            partial_count=$((partial_count + 1))
         elif [[ "${validate_result}" -ne 0 ]]; then
             status="invalid"
             stale_count=$((stale_count + 1))
@@ -692,7 +700,10 @@ cmd_worktree_list() {
     done <<< "${jq_output}"
 
     if [[ "${stale_count}" -gt 0 ]]; then
-        echo "(${stale_count} stale entries detected — run \"openemr-cmd worktree prune\" to clean up)"
+        echo "(${stale_count} stale state entries — run \"openemr-cmd worktree prune\" to clean up; directories on disk are left intact)"
+    fi
+    if [[ "${partial_count}" -gt 0 ]]; then
+        echo "(${partial_count} entries have missing compose files — run \"openemr-cmd worktree regen <branch>\" to regenerate)"
     fi
 }
 
