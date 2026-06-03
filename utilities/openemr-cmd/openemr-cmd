@@ -18,7 +18,7 @@ set -euo pipefail
 #################################################################################################
 
 # Increment the version when modify script
-VERSION="1.0.37"
+VERSION="1.0.38"
 
 # ============================================================================
 # WORKTREE STATE MANAGEMENT
@@ -1100,7 +1100,7 @@ cmd_prek_uninstall() {
 # If the docker is snap or non-snap docker
 # Setting the container names accordingly
 get_container_names() {
-    INSANE_DEV_DOCKER="openemr-8-4[_\-]1"
+    INSANE_DEV_DOCKER="openemr-8-5[_\-]1"
     EASY_DEV_DOCKER="openemr[_\-]1"
     COUCHDB_DOCKER="couchdb[_\-]1"
     MARIADB_DOCKER="mysql[_\-]1"
