@@ -62,7 +62,7 @@ STUB
 # If the script is restructured, bump this constant — the test
 # 'OC_SCRIPT_FUNCS_END points at end of function defs' in helpers_pure.bats
 # will fail loudly when it drifts.
-OC_SCRIPT_FUNCS_END=1352
+OC_SCRIPT_FUNCS_END=1446
 
 # Source ONLY the function definitions of openemr-cmd into the current shell.
 # Caller is responsible for setting OPENEMR_ROOT (and WT_STATE_FILE / others
@@ -92,4 +92,30 @@ oc_init_repo() {
     : > "${dir}/.placeholder"
     git -C "${dir}" add .placeholder
     git -C "${dir}" commit --quiet -m "init" >/dev/null
+}
+
+# Register a new git worktree on a new branch under <wt-parent>/<dirname>.
+# After this, <wt-parent>/<dirname> exists on disk and
+# 'git -C <repo> worktree list --porcelain' shows it.
+# Useful for setting up "partial" / "valid" fixtures where the worktree
+# is a real registered git worktree but lacks the compose files that
+# `openemr-cmd worktree add` would normally generate.
+#
+# Usage:
+#   oc_add_registered_worktree "${REPO}" "${WT_PARENT}" feature/foo
+# Args:
+#   $1 repo (an OPENEMR_ROOT — must already be oc_init_repo'd)
+#   $2 worktree parent directory (where the worktree subdir lands)
+#   $3 branch name to create (passed verbatim to `git worktree add -b`)
+oc_add_registered_worktree() {
+    local repo=$1 wt_parent=$2 branch=$3
+    # Slugify branch for the dirname so 'feature/foo' becomes 'feature-foo'
+    # (the script's wt_slug rule). This is just for the on-disk path; the
+    # branch name registered with git stays as-is.
+    local slug
+    # shellcheck disable=SC2312
+    slug=$(echo "${branch}" | tr '/' '-' | tr -cd 'a-zA-Z0-9_-' | tr '[:upper:]' '[:lower:]')
+    local wt_dir="${wt_parent}/openemr-wt-${slug}"
+    git -C "${repo}" worktree add --quiet -b "${branch}" "${wt_dir}" >/dev/null
+    echo "${wt_dir}"
 }
