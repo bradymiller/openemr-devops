@@ -195,6 +195,10 @@ auto_setup() {
     # This enables opcache file caching for faster PHP execution during installation
     TMP_FILE_CACHE_LOCATION="/tmp/php-file-cache"
     mkdir -p "${TMP_FILE_CACHE_LOCATION}"
+    # Apache needs read+write to populate the opcache file cache during
+    # the install run (we drop to apache below via su -p). The dir is
+    # rm -rf'd at the end of this entrypoint either way.
+    chmod 0777 "${TMP_FILE_CACHE_LOCATION}"
 
     # Create auto_configure.ini to leverage opcache for faster installation
     {
@@ -210,8 +214,16 @@ auto_setup() {
     # Update heartbeat right before long-running PHP command
     [[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat
 
-    # Run auto_configure with optimized PHP settings
-    php /var/www/localhost/htdocs/auto_configure.php -c auto_configure.ini -f "${CONFIGURATION}" || return 1
+    # Run auto_configure with optimized PHP settings.
+    # Drop privileges to apache: auto_configure.php goes through the
+    # Installer class, which openemr#12267's RootCliGuard refuses to
+    # run as root. `-p` preserves env (TMP_FILE_CACHE_LOCATION, PATH,
+    # MYSQL_*, etc.). The Dockerfile sets auto_configure.php to mode
+    # 000 as a safety measure (root can read regardless); briefly
+    # chmod to 0644 so apache can read it. The file is rm'd at the
+    # end of this entrypoint either way.
+    chmod 0644 /var/www/localhost/htdocs/auto_configure.php
+    su -p -s /bin/sh apache -c "php /var/www/localhost/htdocs/auto_configure.php -c auto_configure.ini -f \"${CONFIGURATION}\"" || return 1
 
     # Update heartbeat after PHP execution completes
     [[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat

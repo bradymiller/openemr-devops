@@ -581,6 +581,10 @@ run_auto_configure() {
     # Create temporary file cache directory for opcache
     TMP_FILE_CACHE_LOCATION="/tmp/php-file-cache"
     mkdir -p "${TMP_FILE_CACHE_LOCATION}"
+    # Apache needs read+write to populate the opcache file cache during
+    # the install run (we drop to apache below via su -p). The dir is
+    # rm -rf'd at the end of this entrypoint either way.
+    chmod 0777 "${TMP_FILE_CACHE_LOCATION}"
 
     # Create optimized PHP configuration for installation
     {
@@ -599,12 +603,23 @@ run_auto_configure() {
     # Update heartbeat right before the long-running PHP command
     [[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat
 
-    # Run auto_configure with optimized PHP settings
-    # Note: CONFIGURATION is a space-separated string like "server=mysql rootpass=root loginhost=%"
-    # We need to split it and pass as separate arguments, not use -f flag (which doesn't exist)
-    # Split CONFIGURATION into an array and pass each element as a separate argument
+    # Run auto_configure with optimized PHP settings.
+    # Drop privileges to apache: auto_configure.php goes through the
+    # Installer class, which openemr#12267's RootCliGuard refuses to
+    # run as root. `-p` preserves env (PATH, MYSQL_*, etc.). The
+    # space-joined ${config_args[*]} is interpolated into su -c's
+    # single command string and re-word-split by the inner shell, so
+    # each key=value reaches php as a separate argv element (matches
+    # the original "${config_args[@]}" behavior). Safe here because
+    # CONFIGURATION values are simple key=value pairs with no spaces
+    # or shell-special chars.
+    # The Dockerfile sets auto_configure.php to mode 000 as a safety
+    # measure (root can read regardless); briefly chmod to 0644 so
+    # apache can read it. The file is rm'd at the end of this
+    # entrypoint either way.
+    chmod 0644 auto_configure.php
     read -r -a config_args <<< "${CONFIGURATION}"
-    /usr/local/bin/php -c auto_configure.ini auto_configure.php "${config_args[@]}" || return 1
+    su -p -s /bin/sh apache -c "/usr/local/bin/php -c auto_configure.ini auto_configure.php ${config_args[*]}" || return 1
 
     # Update heartbeat after PHP execution completes
     [[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat
