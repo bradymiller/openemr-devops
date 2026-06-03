@@ -195,10 +195,11 @@ auto_setup() {
     # This enables opcache file caching for faster PHP execution during installation
     TMP_FILE_CACHE_LOCATION="/tmp/php-file-cache"
     mkdir -p "${TMP_FILE_CACHE_LOCATION}"
-    # Apache needs read+write to populate the opcache file cache during
-    # the install run (we drop to apache below via su -p). The dir is
-    # rm -rf'd at the end of this entrypoint either way.
-    chmod 0777 "${TMP_FILE_CACHE_LOCATION}"
+    # Apache is the only writer (we drop to apache below via su -p);
+    # chown and restrict the dir to that user. The dir is rm -rf'd at
+    # the end of this entrypoint either way.
+    chown apache:apache "${TMP_FILE_CACHE_LOCATION}"
+    chmod 0700 "${TMP_FILE_CACHE_LOCATION}"
 
     # Create auto_configure.ini to leverage opcache for faster installation
     {
@@ -217,13 +218,17 @@ auto_setup() {
     # Run auto_configure with optimized PHP settings.
     # Drop privileges to apache: auto_configure.php goes through the
     # Installer class, which openemr#12267's RootCliGuard refuses to
-    # run as root. `-p` preserves env (TMP_FILE_CACHE_LOCATION, PATH,
-    # MYSQL_*, etc.). The Dockerfile sets auto_configure.php to mode
-    # 000 as a safety measure (root can read regardless); briefly
-    # chmod to 0644 so apache can read it. The file is rm'd at the
-    # end of this entrypoint either way.
+    # run as root. `su-exec` exec's the program directly with no
+    # intervening shell, preserving env and passing each arg
+    # verbatim — see run_php_as_apache in devtoolsLibrary.source for
+    # the rationale on using su-exec instead of busybox su.
+    # The Dockerfile sets auto_configure.php to mode 000 as a safety
+    # measure (root can read regardless); briefly chmod to 0644 so
+    # apache can read it. The file is rm'd at the end of this
+    # entrypoint either way.
     chmod 0644 /var/www/localhost/htdocs/auto_configure.php
-    su -p -s /bin/sh apache -c "php /var/www/localhost/htdocs/auto_configure.php -c auto_configure.ini -f \"${CONFIGURATION}\"" || return 1
+    su-exec apache \
+        php /var/www/localhost/htdocs/auto_configure.php -c auto_configure.ini -f "${CONFIGURATION}" || return 1
 
     # Update heartbeat after PHP execution completes
     [[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat

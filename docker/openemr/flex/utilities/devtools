@@ -504,7 +504,7 @@ if [ "$1" = "set-swagger-to-multisite" ]; then
     fi
     echo "Setting swagger to use site ${site}"
     # first reset the openemr-api.yaml to go back to default
-    run_php_as_apache "php /var/www/localhost/htdocs/openemr/bin/command-runner -c CreateAPIDocumentation"
+    run_php_as_apache php /var/www/localhost/htdocs/openemr/bin/command-runner -c CreateAPIDocumentation
     # now make the needed changes if site is not default (since already set to default in above line)
     if [ "${site}" != "default" ]; then
         sed -i "s@/apis/default/@/apis/${site}/@" /var/www/localhost/htdocs/openemr/swagger/openemr-api.yaml
@@ -810,7 +810,7 @@ fi
 # ============================================================================
 if [ "$1" = "build-api-docs" ]; then
     echo "Building and placing api swagger docs"
-    run_php_as_apache "php /var/www/localhost/htdocs/openemr/bin/console openemr:create-api-documentation"
+    run_php_as_apache php /var/www/localhost/htdocs/openemr/bin/console openemr:create-api-documentation
 fi
 
 # ============================================================================
