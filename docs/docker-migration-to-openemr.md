@@ -25,10 +25,15 @@ tests/bats/binary/                         ← BATS tests for binary
 tests/bats/release/                        ← BATS tests for master's "next" Dockerfile
 
 .github/workflows/build-release.yml        ← single-entry matrix: pushes "dev" + next tags
-.github/workflows/build-flex.yml           ← matrix of alpine × PHP combos
+.github/workflows/build-flex-core.yml      ← reusable workflow holding the actual flex build steps
+.github/workflows/build-322.yml            ← thin caller for alpine 3.22 PHP matrix
+.github/workflows/build-323.yml            ← thin caller for alpine 3.23 PHP matrix
+.github/workflows/build-edge.yml           ← thin caller for alpine edge PHP matrix
 .github/workflows/build-binary.yml
 .github/workflows/test-release.yml         ← PR validation for release Dockerfile
-.github/workflows/test-flex.yml            ← PR validation for flex (consolidated from current test-flex-322/323/edge)
+.github/workflows/test-flex-322.yml        ← PR validation for alpine 3.22 flex
+.github/workflows/test-flex-323.yml        ← PR validation for alpine 3.23 flex
+.github/workflows/test-flex-edge.yml       ← PR validation for alpine edge flex
 .github/workflows/test-binary.yml
 .github/workflows/test-bats.yml            ← runs tests/bats/{flex,binary,release}/
 .github/workflows/test-production.yml      ← simplified -- no more multi-version glob
@@ -55,7 +60,7 @@ Per-branch tag examples:
 - `rel-800` → pushes `8.0.0` and `latest`
 - `rel-704` → pushes `7.0.4`
 
-No flex / no binary / no orchestrator / no test-core / no test-flex on rel branches. They are self-contained for their one production image.
+No flex / no binary / no orchestrator / no test-core / no test-flex-* on rel branches. They are self-contained for their one production image.
 
 ## Validated foundation
 
@@ -82,11 +87,12 @@ GitHub Actions `on: schedule:` triggers only fire from the default branch. A `sc
 | `/tests/bats/8.1.1/` | `openemr` `rel-811` as `tests/bats/release/` |
 | `/tests/bats/8.1.0/` | `openemr` `rel-810` as `tests/bats/release/` |
 | `/tests/bats/helpers.bash` | Removed (one-line constant inlined in each `.bats` file) |
-| `build-flex-core.yml` / `build-323.yml` / `build-322.yml` / `build-edge.yml` | Consolidated as `openemr` master `build-flex.yml` |
+| `build-flex-core.yml` (reusable) | `openemr` master `build-flex-core.yml` (as-is) |
+| `build-322.yml` / `build-323.yml` / `build-edge.yml` | `openemr` master, same filenames (as-is) |
 | `build-704/800/810/811.yml` | Per-rel-branch `build-release.yml` (single matrix entry) |
 | `test-bats.yml` | Master + each rel branch (filtered to local BATS dirs) |
 | `test-production.yml` | Master + each rel branch (simplified, no multi-version glob) |
-| `test-flex-322.yml` / `test-flex-323.yml` / `test-flex-edge.yml` | Consolidated as `openemr` master `test-flex.yml` |
+| `test-flex-322.yml` / `test-flex-323.yml` / `test-flex-edge.yml` | `openemr` master, same filenames (as-is) |
 | `test-core.yml` | `openemr` master (reusable) |
 | `test-container-functionality.yml` | `openemr` master |
 | `build-release-on-tag.yml` + `build-release.yml` (release packaging) | Replaced by in-repo `on: push: tags:` triggers on each rel branch |
@@ -111,7 +117,7 @@ So no Dependabot migration is required for the production Dockerfiles -- the ent
 | Phase | Work | Effort |
 |---|---|---|
 | 1a. Foundation on master | Path layout decisions, Docker Hub credential provisioning (org-level preferred), empty `release-cron.yml` skeleton. | ~1 day |
-| 1b. Flex + binary migration | Port both Dockerfiles, their build + test workflows, their BATS dirs. Consolidate the three test-flex-* workflows into a single matrix-driven `test-flex.yml`. Update hadolint + docker-compose-lint includes. | ~1.5 days |
+| 1b. Flex + binary migration | Port both Dockerfiles, their build + test workflows, their BATS dirs. Lift-and-shift the flex workflows (build-flex-core + per-alpine build/test files) as-is -- the per-variant split serves the recently-refactored "add/remove alpine version = file add/delete" model. Update hadolint + docker-compose-lint includes. | ~1 day |
 | 1c. Master's release Dockerfile + BATS | Add `docker/openemr/release/`, `build-release.yml` (single-entry matrix for `dev` tag), `test-release.yml`, `tests/bats/release/` skeleton. Wire `release-cron.yml` to self-dispatch master and verify end-to-end. | ~1 day |
 | 2. Per rel-branch migration | For each rel-X.Y.Z: cherry-pick Dockerfile + workflows, rename `tests/bats/X.Y.Z/` → `tests/bats/release/`, strip hard-coded version prefixes, smoke-test via workflow_dispatch, then delete the matching `build-XXX.yml` and `tests/bats/X.Y.Z/` from devops. | ~0.5-1 day × N |
 | 3. Release tag automation | Replace cross-repo `repository_dispatch openemr-tag` (core → devops) with in-repo `on: push: tags:` triggers on each rel branch's `build-release.yml`. | ~0.5 day |
