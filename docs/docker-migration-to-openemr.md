@@ -169,4 +169,3 @@ Reversible at any phase. Each devops `build-XXX.yml` can be restored from git hi
 - Thoughts on path naming (item 2 above)?
 - Org-level vs repo-level Docker Hub secrets (item 1)?
 - Anything missing from the inventory of what moves?
-- Anyone want to take a phase?
