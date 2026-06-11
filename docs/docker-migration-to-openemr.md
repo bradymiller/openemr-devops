@@ -30,13 +30,12 @@ tests/bats/release/                        ← BATS tests for master's "next" Do
 .github/workflows/build-323.yml            ← thin caller for alpine 3.23 PHP matrix
 .github/workflows/build-edge.yml           ← thin caller for alpine edge PHP matrix
 .github/workflows/build-binary.yml
-.github/workflows/test-release.yml         ← PR validation for release Dockerfile
+.github/workflows/test-release.yml         ← PR validation for release Dockerfile (renamed from devops's test-production.yml; no more multi-version glob)
 .github/workflows/test-flex-322.yml        ← PR validation for alpine 3.22 flex
 .github/workflows/test-flex-323.yml        ← PR validation for alpine 3.23 flex
 .github/workflows/test-flex-edge.yml       ← PR validation for alpine edge flex
 .github/workflows/test-binary.yml
 .github/workflows/test-bats.yml            ← runs tests/bats/{flex,binary,release}/
-.github/workflows/test-production.yml      ← simplified -- no more multi-version glob
 .github/workflows/test-core.yml            ← reusable building block
 .github/workflows/test-container-functionality.yml
 .github/workflows/release-cron.yml         ← schedule + fan-out via workflow_dispatch --ref
@@ -48,9 +47,8 @@ tests/bats/release/                        ← BATS tests for master's "next" Do
 docker/openemr/release/Dockerfile          ← version-pinned for X.Y.Z
 tests/bats/release/                        ← branch-local BATS tests, version prefixes stripped
 .github/workflows/build-release.yml        ← single matrix entry with this release's tag list
-.github/workflows/test-release.yml
+.github/workflows/test-release.yml         ← runs against this branch's Dockerfile
 .github/workflows/test-bats.yml            ← runs only tests/bats/release/
-.github/workflows/test-production.yml      ← runs against this branch's Dockerfile
 ```
 
 Per-branch tag examples:
@@ -91,7 +89,7 @@ GitHub Actions `on: schedule:` triggers only fire from the default branch. A `sc
 | `build-322.yml` / `build-323.yml` / `build-edge.yml` | `openemr` master, same filenames (as-is) |
 | `build-704/800/810/811.yml` | Per-rel-branch `build-release.yml` (single matrix entry) |
 | `test-bats.yml` | Master + each rel branch (filtered to local BATS dirs) |
-| `test-production.yml` | Master + each rel branch (simplified, no multi-version glob) |
+| `test-production.yml` | Renamed to `test-release.yml`. Master + each rel branch (simplified, no multi-version glob). |
 | `test-flex-322.yml` / `test-flex-323.yml` / `test-flex-edge.yml` | `openemr` master, same filenames (as-is) |
 | `test-core.yml` | `openemr` master (reusable) |
 | `test-container-functionality.yml` | `openemr` master |
