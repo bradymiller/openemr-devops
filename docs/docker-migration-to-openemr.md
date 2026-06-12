@@ -24,7 +24,7 @@ tests/bats/flex/                           ← BATS tests for flex
 tests/bats/binary/                         ← BATS tests for binary
 tests/bats/release/                        ← BATS tests for master's "next" Dockerfile
 
-.github/workflows/build-release.yml        ← single-entry matrix: pushes "dev" + next tags
+.github/workflows/build-release.yml        ← byte-identical across all branches; reads tags from input set by master's orchestrator
 .github/workflows/build-flex-core.yml      ← reusable workflow holding the actual flex build steps
 .github/workflows/build-322.yml            ← thin caller for alpine 3.22 PHP matrix
 .github/workflows/build-323.yml            ← thin caller for alpine 3.23 PHP matrix
@@ -46,19 +46,19 @@ tests/bats/release/                        ← BATS tests for master's "next" Do
 ```
 docker/openemr/release/Dockerfile          ← version-pinned for X.Y.Z
 tests/bats/release/                        ← branch-local BATS tests, version prefixes stripped
-.github/workflows/build-release.yml        ← single matrix entry with this release's tag list
+.github/workflows/build-release.yml        ← byte-identical to master's; tags come from orchestrator input
 .github/workflows/test-release.yml         ← runs against this branch's Dockerfile
 .github/workflows/test-bats.yml            ← runs only tests/bats/release/
 ```
 
-Per-branch tag examples:
-- master → pushes `dev` and whatever-next tags
-- `rel-811` → pushes `8.1.1` and `next`
-- `rel-810` → pushes `8.1.0`
-- `rel-800` → pushes `8.0.0` and `latest`
-- `rel-704` → pushes `7.0.4`
-
 No flex / no binary / no orchestrator / no test-core / no test-flex-* on rel branches. They are self-contained for their one production image.
+
+Per-branch tag mapping (defined in master's orchestrator, not the rel branches):
+- master → `dev`
+- `rel-811` → `8.1.1`, `next`
+- `rel-810` → `8.1.0`
+- `rel-800` → `8.0.0`, `latest`
+- `rel-704` → `7.0.4`
 
 ## Validated foundation
 
@@ -66,9 +66,85 @@ The core design assumption -- that `workflow_dispatch --ref <rel-branch>` from a
 
 This means: when master's `release-cron.yml` dispatches `build-release.yml --ref rel-810`, the resulting run uses rel-810's `build-release.yml` definition (its tag list, its build steps) against rel-810's `docker/openemr/release/Dockerfile`. Per-branch isolation is real.
 
-## Why scheduling has to live on master
+## Master orchestrates schedule AND tag assignment
 
-GitHub Actions `on: schedule:` triggers only fire from the default branch. A `schedule:` block in a workflow file on `rel-810` will never fire. So the cron tick lives in master's `release-cron.yml`, which fans out via `gh workflow run --ref <branch>` to each active rel branch's `build-release.yml`. Rel-branch workflows have only `push:` / `pull_request:` / `workflow_dispatch:` triggers.
+`release-cron.yml` on master does two jobs: it owns the cron tick (since GitHub Actions `schedule:` only fires from the default branch), and it owns the source of truth for which docker tags each branch should push. The orchestrator passes the tag list to each dispatched build as a `workflow_dispatch` input. Consequences:
+
+- `build-release.yml` is **byte-identical** across master and every rel branch. The only per-branch differences are the Dockerfile contents and the BATS tests.
+- Tag promotion (rotating `latest`, bumping `next`) is a one-line edit on master -- no PR against the affected rel branch.
+- Branch-cut doesn't require editing the new rel branch's workflow file at all; just add a fan-out entry on master with the new branch's tag list.
+
+### Orchestrator skeleton (master)
+
+```yaml
+# .github/workflows/release-cron.yml
+on:
+  schedule:
+  - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      run_master:  { description: 'Build master (dev tag)', type: boolean, default: true }
+      run_rel_811: { description: 'Build rel-811',          type: boolean, default: true }
+      run_rel_810: { description: 'Build rel-810',          type: boolean, default: true }
+      run_rel_800: { description: 'Build rel-800',          type: boolean, default: true }
+      run_rel_704: { description: 'Build rel-704',          type: boolean, default: true }
+
+jobs:
+  fan-out:
+    runs-on: ubuntu-24.04
+    steps:
+    - name: master (dev)
+      if: ${{ github.event_name == 'schedule' || inputs.run_master }}
+      env: { GH_TOKEN: ${{ github.token }} }
+      run: gh workflow run build-release.yml --ref master -f tags="dev"
+
+    - name: rel-811
+      if: ${{ github.event_name == 'schedule' || inputs.run_rel_811 }}
+      env: { GH_TOKEN: ${{ github.token }} }
+      run: gh workflow run build-release.yml --ref rel-811 -f tags="8.1.1,next"
+
+    - name: rel-810
+      if: ${{ github.event_name == 'schedule' || inputs.run_rel_810 }}
+      env: { GH_TOKEN: ${{ github.token }} }
+      run: gh workflow run build-release.yml --ref rel-810 -f tags="8.1.0"
+
+    - name: rel-800
+      if: ${{ github.event_name == 'schedule' || inputs.run_rel_800 }}
+      env: { GH_TOKEN: ${{ github.token }} }
+      run: gh workflow run build-release.yml --ref rel-800 -f tags="8.0.0,latest"
+
+    - name: rel-704
+      if: ${{ github.event_name == 'schedule' || inputs.run_rel_704 }}
+      env: { GH_TOKEN: ${{ github.token }} }
+      run: gh workflow run build-release.yml --ref rel-704 -f tags="7.0.4"
+```
+
+Cron runs (`github.event_name == 'schedule'`) ignore the inputs and run everything. Manual dispatch shows a checkbox per branch in the Actions UI, all pre-checked; uncheck to skip. GitHub limits `workflow_dispatch` to 10 inputs, so this scales cleanly to ~9 active rel branches; beyond that, switch to a single comma-separated text input.
+
+### build-release.yml (byte-identical across all branches)
+
+```yaml
+# .github/workflows/build-release.yml -- identical on master and every rel-X.Y.Z
+on:
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: 'Comma-separated tags to push (e.g. "8.1.0,latest"; leave default for an ad-hoc test build)'
+        required: true
+        type: string
+        default: 'manual-test'
+  push:
+    tags: ['v*']    # real release tagging; tag value drives docker tag
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+    # ... build docker/openemr/release/Dockerfile ...
+    # ... push ${{ inputs.tags }} (comma-split) or the value derived from the git tag on push: tags: ...
+```
+
+When the orchestrator dispatches `-f tags="8.1.0,latest"`, those tags get pushed. When a maintainer manually dispatches a rel branch's build for testing, the form pre-fills `manual-test` -- a safe sentinel that never clobbers production tags. They type real tags only when they mean to push real tags.
 
 ## What moves where (concrete)
 
@@ -116,9 +192,9 @@ So no Dependabot migration is required for the production Dockerfiles -- the ent
 |---|---|---|
 | 1a. Foundation on master | Path layout decisions, Docker Hub credential provisioning (org-level preferred), empty `release-cron.yml` skeleton. | ~1 day |
 | 1b. Flex + binary migration | Port both Dockerfiles, their build + test workflows, their BATS dirs. Lift-and-shift the flex workflows (build-flex-core + per-alpine build/test files) as-is -- the per-variant split serves the recently-refactored "add/remove alpine version = file add/delete" model. Update hadolint + docker-compose-lint includes. | ~1 day |
-| 1c. Master's release Dockerfile + BATS | Add `docker/openemr/release/`, `build-release.yml` (single-entry matrix for `dev` tag), `test-release.yml`, `tests/bats/release/` skeleton. Wire `release-cron.yml` to self-dispatch master and verify end-to-end. | ~1 day |
-| 2. Per rel-branch migration | For each rel-X.Y.Z: cherry-pick Dockerfile + workflows, rename `tests/bats/X.Y.Z/` → `tests/bats/release/`, strip hard-coded version prefixes, smoke-test via workflow_dispatch, then delete the matching `build-XXX.yml` and `tests/bats/X.Y.Z/` from devops. | ~0.5-1 day × N |
-| 3. Release tag automation | Replace cross-repo `repository_dispatch openemr-tag` (core → devops) with in-repo `on: push: tags:` triggers on each rel branch's `build-release.yml`. | ~0.5 day |
+| 1c. Master's release Dockerfile + orchestrator | Add `docker/openemr/release/`, `build-release.yml` (reads tags from input), `test-release.yml`, `tests/bats/release/` skeleton. Build `release-cron.yml` with the per-branch boolean inputs and fan-out steps. Wire master's own self-dispatch and verify end-to-end. | ~1 day |
+| 2. Per rel-branch migration | For each rel-X.Y.Z: cherry-pick Dockerfile + the byte-identical `build-release.yml` + `test-release.yml` + `test-bats.yml`, rename `tests/bats/X.Y.Z/` → `tests/bats/release/`, strip hard-coded version prefixes, smoke-test via workflow_dispatch, add the new branch to master's orchestrator, then delete the matching `build-XXX.yml` and `tests/bats/X.Y.Z/` from devops. | ~0.5-1 day × N |
+| 3. Release tag automation | Replace cross-repo `repository_dispatch openemr-tag` (core → devops) with the in-repo `on: push: tags:` trigger already present on each rel branch's `build-release.yml`. Sort out the existing devops `build-release.yml` (release packaging / tarballs) -- distinct from the docker build workflow despite the name collision; needs migration to core under a non-colliding name like `package-release.yml`. | ~1 day |
 | 4. Consumer auto-sync | Add an in-repo auto-PR step for digest pins in `docker/development-*` compose files after each push. | ~1 day |
 | 5. Devops cleanup | Delete migrated docker paths, BATS dirs, workflows. Remove dead dependabot entries. Add README banner pointing at new locations. Keep `openemr-cmd/`, `kubernetes/`, `tests/bats/openemr-cmd/`, and their workflows. | ~0.5 day |
 
@@ -126,15 +202,15 @@ Total active engineering: **~1.5 weeks** assuming 4 active rel branches. Calenda
 
 ## Branch-cut process under the final model
 
-5 steps when cutting a new `rel-X.Y.Z`:
+3 steps when cutting a new `rel-X.Y.Z`:
 
 1. Cut `rel-X.Y.Z` from master
-2. Edit the matrix entry in `build-release.yml` to push the new release's tag list
-3. Pin `docker/openemr/release/Dockerfile` to X.Y.Z
-4. Add the branch name to master's `release-cron.yml` fan-out list
-5. On master, re-shape "what next means" in `build-release.yml`
+2. Pin `docker/openemr/release/Dockerfile` to X.Y.Z on the new branch
+3. Add a fan-out entry on master's `release-cron.yml` with the new branch's tag list (and a `run_rel_XYZ` boolean input)
 
-BATS, dependabot, hadolint paths, lint configs -- none change at branch-cut, because their paths are uniform across branches.
+`build-release.yml`, `test-release.yml`, `test-bats.yml`, BATS contents, dependabot, hadolint paths, lint configs -- none change at branch-cut, because `build-release.yml` is identical across branches and the paths are uniform.
+
+When it's time to rotate `latest` (e.g., 8.1.0 graduates to GA): a two-line edit in master's orchestrator. No PR against either rel branch.
 
 ## Decisions to lock before phase 1
 
