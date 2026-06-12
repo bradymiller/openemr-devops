@@ -54,11 +54,12 @@ tests/bats/docker/release/                        ← branch-local BATS tests, v
 No flex / no binary / no orchestrator / no test-core / no test-flex-* on rel branches. They are self-contained for their one production image.
 
 Per-branch tag mapping (defined in master's orchestrator, not the rel branches):
-- master → `dev`
-- `rel-811` → `8.1.1`, `next`
-- `rel-810` → `8.1.0`
-- `rel-800` → `8.0.0`, `latest`
+- master → `dev`, `next`
+- `rel-810` → `8.1.0`, `latest`
+- `rel-800` → `8.0.0`
 - `rel-704` → `7.0.4`
+
+(`rel-811` doesn't exist yet; when it's cut from master, the standard branch-cut steps below add it.)
 
 ## Validated foundation
 
@@ -106,13 +107,11 @@ jobs:
       matrix:
         include:
         - branch: master
-          tags: 'dev'
-        - branch: rel-811
-          tags: '8.1.1,next'
+          tags: 'dev,next'
         - branch: rel-810
-          tags: '8.1.0'
+          tags: '8.1.0,latest'
         - branch: rel-800
-          tags: '8.0.0,latest'
+          tags: '8.0.0'
         - branch: rel-704
           tags: '7.0.4'
     steps:
@@ -204,13 +203,13 @@ The dated-tag rule matches the current devops convention (`date +'%Y-%m-%d'` fro
 |---|---|
 | `/docker/openemr/flex/` | `openemr` master `docker/openemr/flex/` |
 | `/docker/openemr/binary/` | `openemr` master `docker/openemr/binary/` |
-| `/docker/openemr/8.1.1/` | `openemr` `rel-811` as `docker/openemr/release/` |
+| `/docker/openemr/8.1.1/` | `openemr` master as `docker/openemr/release/` (this dir tracks `OPENEMR_VERSION=master`, so it's the dev/next build, not a real rel-811 yet) |
 | `/docker/openemr/8.1.0/` | `openemr` `rel-810` as `docker/openemr/release/` |
 | `/docker/openemr/8.0.0/` | `openemr` `rel-800` as `docker/openemr/release/` |
 | `/docker/openemr/7.0.4/` | `openemr` `rel-704` as `docker/openemr/release/` |
 | `/tests/bats/flex/` | `openemr` master as `tests/bats/docker/flex/` |
 | `/tests/bats/binary/` | `openemr` master as `tests/bats/docker/binary/` |
-| `/tests/bats/8.1.1/` | `openemr` `rel-811` as `tests/bats/docker/release/` |
+| `/tests/bats/8.1.1/` | `openemr` master as `tests/bats/docker/release/` (matches the docker dir's destination) |
 | `/tests/bats/8.1.0/` | `openemr` `rel-810` as `tests/bats/docker/release/` |
 | `/tests/bats/helpers.bash` | Removed (one-line constant inlined in each `.bats` file) |
 | `build-flex-core.yml` (reusable) | `openemr` master `docker-build-flex-core.yml` (prefixed during move) |
