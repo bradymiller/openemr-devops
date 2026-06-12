@@ -38,7 +38,7 @@ tests/bats/docker/release/                        ← BATS tests for master's "n
 .github/workflows/docker-test-bats.yml            ← runs tests/bats/docker/{flex,binary,release}/
 .github/workflows/docker-test-core.yml            ← reusable building block
 .github/workflows/docker-test-container-functionality.yml
-.github/workflows/docker-release-cron.yml         ← schedule + fan-out via workflow_dispatch --ref
+.github/workflows/docker-release-orchestrator.yml         ← schedule + fan-out via workflow_dispatch --ref
 ```
 
 **openemr/openemr `rel-X.Y.Z`** (each release branch):
@@ -65,11 +65,11 @@ Per-branch tag mapping (defined in master's orchestrator, not the rel branches):
 
 The core design assumption -- that `workflow_dispatch --ref <rel-branch>` from a master-side orchestrator runs the rel-branch's workflow definition AND checks out the rel-branch's tree -- was validated in a throwaway fork experiment. Both the dispatched workflow's YAML steps and the runner's checkout came from the target branch, not master. Confirmed `github.ref` == `refs/heads/<target-branch>` in the dispatched run.
 
-This means: when master's `docker-release-cron.yml` dispatches `docker-build-release.yml --ref rel-810`, the resulting run uses rel-810's `docker-build-release.yml` definition (its tag list, its build steps) against rel-810's `docker/release/Dockerfile`. Per-branch isolation is real.
+This means: when master's `docker-release-orchestrator.yml` dispatches `docker-build-release.yml --ref rel-810`, the resulting run uses rel-810's `docker-build-release.yml` definition (its tag list, its build steps) against rel-810's `docker/release/Dockerfile`. Per-branch isolation is real.
 
 ## Master orchestrates schedule AND tag assignment
 
-`docker-release-cron.yml` on master does two jobs: it owns the cron tick (since GitHub Actions `schedule:` only fires from the default branch), and it owns the source of truth for which docker tags each branch should push. The orchestrator passes the tag list to each dispatched build as a `workflow_dispatch` input. Consequences:
+`docker-release-orchestrator.yml` on master does two jobs: it owns the cron tick (since GitHub Actions `schedule:` only fires from the default branch), and it owns the source of truth for which docker tags each branch should push. The orchestrator passes the tag list to each dispatched build as a `workflow_dispatch` input. Consequences:
 
 - `docker-build-release.yml` is **byte-identical** across master and every rel branch. The only per-branch differences are the Dockerfile contents and the BATS tests.
 - Tag promotion (rotating `latest`, bumping `next`) is a one-line edit on master -- no PR against the affected rel branch.
@@ -80,7 +80,7 @@ This means: when master's `docker-release-cron.yml` dispatches `docker-build-rel
 A single inline matrix is the source of truth for which branches build and which logical tags each pushes. Adding a rel branch is a one-row diff; rotating `latest` is a one-line diff.
 
 ```yaml
-# .github/workflows/docker-release-cron.yml
+# .github/workflows/docker-release-orchestrator.yml
 on:
   schedule:
   - cron: '0 6 * * *'
@@ -242,9 +242,9 @@ So no Dependabot migration is required for the production Dockerfiles -- the ent
 
 | Phase | Work | Effort |
 |---|---|---|
-| 1a. Foundation on master | Path layout decisions, Docker Hub credential provisioning (org-level preferred), empty `docker-release-cron.yml` skeleton. | ~1 day |
+| 1a. Foundation on master | Path layout decisions, Docker Hub credential provisioning (org-level preferred), empty `docker-release-orchestrator.yml` skeleton. | ~1 day |
 | 1b. Flex + binary migration | Port both Dockerfiles, their build + test workflows, their BATS dirs. Prefix all moved workflow filenames with `docker-` (see "what moves where"). The flex workflows are lift-and-shift modulo the prefix -- the per-variant split serves the recently-refactored "add/remove alpine version = file add/delete" model. Also: rename existing `hadolint.yml` → `docker-lint-hadolint.yml` (fixes the 2 self-references inside it + the README badge URL); update `docker-compose-lint.yml` and renamed-hadolint includes to cover new Dockerfile paths. | ~1 day |
-| 1c. Master's release Dockerfile + orchestrator | Add `docker/release/`, `docker-build-release.yml` (reads tags from input), `docker-test-release.yml`, `tests/bats/docker/release/` skeleton. Build `docker-release-cron.yml` with the matrix-driven fan-out + include/exclude inputs. Wire master's own self-dispatch and verify end-to-end. | ~1 day |
+| 1c. Master's release Dockerfile + orchestrator | Add `docker/release/`, `docker-build-release.yml` (reads tags from input), `docker-test-release.yml`, `tests/bats/docker/release/` skeleton. Build `docker-release-orchestrator.yml` with the matrix-driven fan-out + include/exclude inputs. Wire master's own self-dispatch and verify end-to-end. | ~1 day |
 | 2. Per rel-branch migration | For each rel-X.Y.Z: cherry-pick Dockerfile + the byte-identical `docker-build-release.yml` + `docker-test-release.yml` + `docker-test-bats.yml`, rename `tests/bats/X.Y.Z/` → `tests/bats/docker/release/`, strip hard-coded version prefixes, smoke-test via workflow_dispatch, add the new branch to master's orchestrator, then delete the matching `build-XXX.yml` and `tests/bats/X.Y.Z/` from devops. | ~0.5-1 day × N |
 | 3. Release tag automation | Replace cross-repo `repository_dispatch openemr-tag` (core → devops) with the in-repo `on: push: tags:` trigger already present on each rel branch's `docker-build-release.yml`. Sort out the existing devops `build-release.yml` (release packaging / tarballs) -- distinct from the docker build workflow; needs migration to core under a non-colliding name like `package-release.yml`. | ~1 day |
 | 4. Consumer auto-sync | Add an in-repo auto-PR step for digest pins in `docker/development-*` compose files after each push. | ~1 day |
@@ -258,7 +258,7 @@ Total active engineering: **~1.5 weeks** assuming 4 active rel branches. Calenda
 
 1. Cut `rel-X.Y.Z` from master
 2. Pin `docker/release/Dockerfile` to X.Y.Z on the new branch
-3. Add a fan-out entry on master's `docker-release-cron.yml` with the new branch's tag list (and a `run_rel_XYZ` boolean input)
+3. Add a one-row matrix entry on master's `docker-release-orchestrator.yml` with the new branch's tag list
 
 `docker-build-release.yml`, `docker-test-release.yml`, `docker-test-bats.yml`, BATS contents, dependabot, hadolint paths, lint configs -- none change at branch-cut, because `docker-build-release.yml` is identical across branches and the paths are uniform.
 
