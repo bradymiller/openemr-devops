@@ -16,9 +16,9 @@ Each branch carries the same filenames for its docker pipeline; contents diverge
 **openemr/openemr master:**
 
 ```
-docker/openemr/release/Dockerfile          ← next-version / "dev" production image
-docker/openemr/flex/Dockerfile             ← multi-version dev/edge (matrix-driven)
-docker/openemr/binary/Dockerfile           ← static-binary helper
+docker/release/Dockerfile          ← next-version / "dev" production image
+docker/flex/Dockerfile             ← multi-version dev/edge (matrix-driven)
+docker/binary/Dockerfile           ← static-binary helper
 
 tests/bats/docker/flex/                           ← BATS tests for flex
 tests/bats/docker/binary/                         ← BATS tests for binary
@@ -44,7 +44,7 @@ tests/bats/docker/release/                        ← BATS tests for master's "n
 **openemr/openemr `rel-X.Y.Z`** (each release branch):
 
 ```
-docker/openemr/release/Dockerfile          ← version-pinned for X.Y.Z
+docker/release/Dockerfile          ← version-pinned for X.Y.Z
 tests/bats/docker/release/                        ← branch-local BATS tests, version prefixes stripped
 .github/workflows/docker-build-release.yml        ← byte-identical to master's; tags come from orchestrator input
 .github/workflows/docker-test-release.yml         ← runs against this branch's Dockerfile
@@ -65,7 +65,7 @@ Per-branch tag mapping (defined in master's orchestrator, not the rel branches):
 
 The core design assumption -- that `workflow_dispatch --ref <rel-branch>` from a master-side orchestrator runs the rel-branch's workflow definition AND checks out the rel-branch's tree -- was validated in a throwaway fork experiment. Both the dispatched workflow's YAML steps and the runner's checkout came from the target branch, not master. Confirmed `github.ref` == `refs/heads/<target-branch>` in the dispatched run.
 
-This means: when master's `docker-release-cron.yml` dispatches `docker-build-release.yml --ref rel-810`, the resulting run uses rel-810's `docker-build-release.yml` definition (its tag list, its build steps) against rel-810's `docker/openemr/release/Dockerfile`. Per-branch isolation is real.
+This means: when master's `docker-release-cron.yml` dispatches `docker-build-release.yml --ref rel-810`, the resulting run uses rel-810's `docker-build-release.yml` definition (its tag list, its build steps) against rel-810's `docker/release/Dockerfile`. Per-branch isolation is real.
 
 ## Master orchestrates schedule AND tag assignment
 
@@ -188,7 +188,7 @@ jobs:
     - name: Build and push
       uses: docker/build-push-action@v6
       with:
-        context: ./docker/openemr/release
+        context: ./docker/release
         push: true
         tags: ${{ steps.tags.outputs.tags }}
 ```
@@ -201,12 +201,12 @@ The dated-tag rule matches the current devops convention (`date +'%Y-%m-%d'` fro
 
 | Source (openemr-devops) | Destination |
 |---|---|
-| `/docker/openemr/flex/` | `openemr` master `docker/openemr/flex/` |
-| `/docker/openemr/binary/` | `openemr` master `docker/openemr/binary/` |
-| `/docker/openemr/8.1.1/` | `openemr` master as `docker/openemr/release/` (this dir tracks `OPENEMR_VERSION=master`, so it's the dev/next build, not a real rel-811 yet) |
-| `/docker/openemr/8.1.0/` | `openemr` `rel-810` as `docker/openemr/release/` |
-| `/docker/openemr/8.0.0/` | `openemr` `rel-800` as `docker/openemr/release/` |
-| `/docker/openemr/7.0.4/` | `openemr` `rel-704` as `docker/openemr/release/` |
+| `/docker/openemr/flex/` | `openemr` master `docker/flex/` |
+| `/docker/openemr/binary/` | `openemr` master `docker/binary/` |
+| `/docker/openemr/8.1.1/` | `openemr` master as `docker/release/` (this dir tracks `OPENEMR_VERSION=master`, so it's the dev/next build, not a real rel-811 yet) |
+| `/docker/openemr/8.1.0/` | `openemr` `rel-810` as `docker/release/` |
+| `/docker/openemr/8.0.0/` | `openemr` `rel-800` as `docker/release/` |
+| `/docker/openemr/7.0.4/` | `openemr` `rel-704` as `docker/release/` |
 | `/tests/bats/flex/` | `openemr` master as `tests/bats/docker/flex/` |
 | `/tests/bats/binary/` | `openemr` master as `tests/bats/docker/binary/` |
 | `/tests/bats/8.1.1/` | `openemr` master as `tests/bats/docker/release/` (matches the docker dir's destination) |
@@ -230,7 +230,7 @@ BATS files like `tests/bats/8.1.1/config_files.bats`:
 - `@test "8.1.1 Dockerfile: ..."` → `@test "Dockerfile: ..."` (branch context tells you the version)
 - `SCRIPT_DIR="$(get_script_dir 8.1.1)"` → direct path constant or removed entirely
 - `helpers.bash`'s `get_script_dir` function → removed
-- Workflow `paths:` triggers shrink from multi-version lists to just `tests/bats/docker/release/**` and `docker/openemr/release/**` on rel branches
+- Workflow `paths:` triggers shrink from multi-version lists to just `tests/bats/docker/release/**` and `docker/release/**` on rel branches
 
 ## Dependabot
 
@@ -244,7 +244,7 @@ So no Dependabot migration is required for the production Dockerfiles -- the ent
 |---|---|---|
 | 1a. Foundation on master | Path layout decisions, Docker Hub credential provisioning (org-level preferred), empty `docker-release-cron.yml` skeleton. | ~1 day |
 | 1b. Flex + binary migration | Port both Dockerfiles, their build + test workflows, their BATS dirs. Prefix all moved workflow filenames with `docker-` (see "what moves where"). The flex workflows are lift-and-shift modulo the prefix -- the per-variant split serves the recently-refactored "add/remove alpine version = file add/delete" model. Also: rename existing `hadolint.yml` → `docker-lint-hadolint.yml` (fixes the 2 self-references inside it + the README badge URL); update `docker-compose-lint.yml` and renamed-hadolint includes to cover new Dockerfile paths. | ~1 day |
-| 1c. Master's release Dockerfile + orchestrator | Add `docker/openemr/release/`, `docker-build-release.yml` (reads tags from input), `docker-test-release.yml`, `tests/bats/docker/release/` skeleton. Build `docker-release-cron.yml` with the matrix-driven fan-out + include/exclude inputs. Wire master's own self-dispatch and verify end-to-end. | ~1 day |
+| 1c. Master's release Dockerfile + orchestrator | Add `docker/release/`, `docker-build-release.yml` (reads tags from input), `docker-test-release.yml`, `tests/bats/docker/release/` skeleton. Build `docker-release-cron.yml` with the matrix-driven fan-out + include/exclude inputs. Wire master's own self-dispatch and verify end-to-end. | ~1 day |
 | 2. Per rel-branch migration | For each rel-X.Y.Z: cherry-pick Dockerfile + the byte-identical `docker-build-release.yml` + `docker-test-release.yml` + `docker-test-bats.yml`, rename `tests/bats/X.Y.Z/` → `tests/bats/docker/release/`, strip hard-coded version prefixes, smoke-test via workflow_dispatch, add the new branch to master's orchestrator, then delete the matching `build-XXX.yml` and `tests/bats/X.Y.Z/` from devops. | ~0.5-1 day × N |
 | 3. Release tag automation | Replace cross-repo `repository_dispatch openemr-tag` (core → devops) with the in-repo `on: push: tags:` trigger already present on each rel branch's `docker-build-release.yml`. Sort out the existing devops `build-release.yml` (release packaging / tarballs) -- distinct from the docker build workflow; needs migration to core under a non-colliding name like `package-release.yml`. | ~1 day |
 | 4. Consumer auto-sync | Add an in-repo auto-PR step for digest pins in `docker/development-*` compose files after each push. | ~1 day |
@@ -257,7 +257,7 @@ Total active engineering: **~1.5 weeks** assuming 4 active rel branches. Calenda
 3 steps when cutting a new `rel-X.Y.Z`:
 
 1. Cut `rel-X.Y.Z` from master
-2. Pin `docker/openemr/release/Dockerfile` to X.Y.Z on the new branch
+2. Pin `docker/release/Dockerfile` to X.Y.Z on the new branch
 3. Add a fan-out entry on master's `docker-release-cron.yml` with the new branch's tag list (and a `run_rel_XYZ` boolean input)
 
 `docker-build-release.yml`, `docker-test-release.yml`, `docker-test-bats.yml`, BATS contents, dependabot, hadolint paths, lint configs -- none change at branch-cut, because `docker-build-release.yml` is identical across branches and the paths are uniform.
@@ -267,7 +267,7 @@ When it's time to rotate `latest` (e.g., 8.1.0 graduates to GA): a two-line edit
 ## Decisions to lock before phase 1
 
 1. **Docker Hub credential scope.** Org-level secrets are preferred so both repos can push during the cutover. If repo-level only, plan a "freeze devops, flip secrets, enable core" window.
-2. **Path naming for the release Dockerfile.** Proposed `docker/openemr/release/`. The existing `docker/openemr/production/docker-compose.yml` in `openemr` would need to either move (e.g., to `docker/production-compose/`) or coexist if we keep separate paths.
+2. **Path naming for the release Dockerfile.** **Resolved during phase 1a.** Use `docker/release/`, `docker/flex/`, `docker/binary/` to match openemr core's existing `docker/<purpose>/` convention (see `docker/production/`, `docker/development-easy/`, `docker/library/`). The existing `docker/production/docker-compose.yml` is a compose recipe for running the production image locally (a different concern than `docker/release/` which holds the Dockerfile that builds it) -- they coexist cleanly. No rename needed.
 3. **Nightly cadence per release branch.** Today devops rebuilds 7.0.4, 8.0.0, 8.1.0, 8.1.1 every night. Worth questioning whether older releases need daily Alpine base-image refreshes -- weekly or only-on-bumps may be enough. Affects the orchestrator fan-out list, not the design.
 4. **Binary helper location.** Keep in `openemr` master next to flex, leave in devops, or carve into its own repo? Doesn't affect the model.
 
