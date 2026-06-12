@@ -76,6 +76,8 @@ This means: when master's `release-cron.yml` dispatches `build-release.yml --ref
 
 ### Orchestrator skeleton (master)
 
+A single inline matrix is the source of truth for which branches build and which logical tags each pushes. Adding a rel branch is a one-row diff; rotating `latest` is a one-line diff.
+
 ```yaml
 # .github/workflows/release-cron.yml
 on:
@@ -83,43 +85,58 @@ on:
   - cron: '0 6 * * *'
   workflow_dispatch:
     inputs:
-      run_master:  { description: 'Build master (dev tag)', type: boolean, default: true }
-      run_rel_811: { description: 'Build rel-811',          type: boolean, default: true }
-      run_rel_810: { description: 'Build rel-810',          type: boolean, default: true }
-      run_rel_800: { description: 'Build rel-800',          type: boolean, default: true }
-      run_rel_704: { description: 'Build rel-704',          type: boolean, default: true }
+      include:
+        description: 'Branches to build (comma-separated, or "all"). Examples: "all", "rel-810", "rel-810,master"'
+        type: string
+        default: 'all'
+      exclude:
+        description: 'Branches to skip (comma-separated). Useful with include=all.'
+        type: string
+        default: ''
+
+permissions:
+  actions: write
+  contents: read
 
 jobs:
   fan-out:
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - branch: master
+          tags: 'dev'
+        - branch: rel-811
+          tags: '8.1.1,next'
+        - branch: rel-810
+          tags: '8.1.0'
+        - branch: rel-800
+          tags: '8.0.0,latest'
+        - branch: rel-704
+          tags: '7.0.4'
     steps:
-    - name: master (dev)
-      if: ${{ github.event_name == 'schedule' || inputs.run_master }}
-      env: { GH_TOKEN: ${{ github.token }} }
-      run: gh workflow run build-release.yml --ref master -f tags="dev"
-
-    - name: rel-811
-      if: ${{ github.event_name == 'schedule' || inputs.run_rel_811 }}
-      env: { GH_TOKEN: ${{ github.token }} }
-      run: gh workflow run build-release.yml --ref rel-811 -f tags="8.1.1,next"
-
-    - name: rel-810
-      if: ${{ github.event_name == 'schedule' || inputs.run_rel_810 }}
-      env: { GH_TOKEN: ${{ github.token }} }
-      run: gh workflow run build-release.yml --ref rel-810 -f tags="8.1.0"
-
-    - name: rel-800
-      if: ${{ github.event_name == 'schedule' || inputs.run_rel_800 }}
-      env: { GH_TOKEN: ${{ github.token }} }
-      run: gh workflow run build-release.yml --ref rel-800 -f tags="8.0.0,latest"
-
-    - name: rel-704
-      if: ${{ github.event_name == 'schedule' || inputs.run_rel_704 }}
-      env: { GH_TOKEN: ${{ github.token }} }
-      run: gh workflow run build-release.yml --ref rel-704 -f tags="7.0.4"
+    - name: Dispatch ${{ matrix.branch }} with tags ${{ matrix.tags }}
+      if: >-
+        ${{
+          (github.event_name == 'schedule'
+            || inputs.include == 'all'
+            || contains(format(',{0},', inputs.include), format(',{0},', matrix.branch)))
+          && !contains(format(',{0},', inputs.exclude), format(',{0},', matrix.branch))
+        }}
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh workflow run build-release.yml \
+          --repo ${{ github.repository }} \
+          --ref ${{ matrix.branch }} \
+          -f tags="${{ matrix.tags }}"
+        echo "Dispatched ${{ matrix.branch }} with tags=${{ matrix.tags }}"
 ```
 
-Cron runs (`github.event_name == 'schedule'`) ignore the inputs and run everything. Manual dispatch shows a checkbox per branch in the Actions UI, all pre-checked; uncheck to skip. GitHub limits `workflow_dispatch` to 10 inputs, so this scales cleanly to ~9 active rel branches; beyond that, switch to a single comma-separated text input.
+The `format(',{0},', x)` wrapping in `contains()` is exact-match (prevents `rel-810` from substring-matching `rel-8100`). Cron runs (`github.event_name == 'schedule'`) bypass both `include` and `exclude` filters and run every matrix entry. Manual dispatch takes a text input -- type `all` (the default) for everything, or list specific branches like `rel-810,master`. The matrix-only design has no per-branch input cap, so it scales beyond GitHub's 10-input limit if releases ever accumulate.
+
+The orchestrator carries **logical** tags only (`8.1.0,next`); build-release.yml is responsible for expanding version-number tags into dated siblings -- see below.
 
 ### build-release.yml (byte-identical across all branches)
 
@@ -140,11 +157,46 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
-    # ... build docker/openemr/release/Dockerfile ...
-    # ... push ${{ inputs.tags }} (comma-split) or the value derived from the git tag on push: tags: ...
+    - uses: actions/checkout@v5
+
+    - name: Compute build date
+      id: build_date
+      run: echo "date=$(date +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
+
+    - name: Expand tag list (add dated variant for version-number tags)
+      id: tags
+      env:
+        INPUT_TAGS: ${{ inputs.tags }}
+        BUILD_DATE: ${{ steps.build_date.outputs.date }}
+      run: |
+        {
+          echo 'tags<<EOF'
+          IFS=',' read -ra TAGS <<< "$INPUT_TAGS"
+          for t in "${TAGS[@]}"; do
+            t="${t// /}"   # strip whitespace
+            [ -z "$t" ] && continue
+            echo "openemr/openemr:${t}"
+            # Rule: version-number tags (digits and dots only) also get a dated sibling.
+            # "8.1.0" -> push "8.1.0" + "8.1.0-2026-06-12"
+            # "next" / "dev" / "latest" / "manual-test" -> no dated variant.
+            if [[ "$t" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+              echo "openemr/openemr:${t}-${BUILD_DATE}"
+            fi
+          done
+          echo EOF
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Build and push
+      uses: docker/build-push-action@v6
+      with:
+        context: ./docker/openemr/release
+        push: true
+        tags: ${{ steps.tags.outputs.tags }}
 ```
 
-When the orchestrator dispatches `-f tags="8.1.0,latest"`, those tags get pushed. When a maintainer manually dispatches a rel branch's build for testing, the form pre-fills `manual-test` -- a safe sentinel that never clobbers production tags. They type real tags only when they mean to push real tags.
+When the orchestrator dispatches `-f tags="8.1.0,latest"`, the build pushes `openemr/openemr:8.1.0`, `openemr/openemr:8.1.0-2026-06-12`, and `openemr/openemr:latest` -- the version-number `8.1.0` gets a dated sibling, the floating `latest` doesn't. When a maintainer manually dispatches for testing, the form pre-fills `manual-test` -- safe sentinel that never clobbers production tags, never gets a dated variant.
+
+The dated-tag rule matches the current devops convention (`date +'%Y-%m-%d'` from build-openemr.yml's tag-merge step) and lives in build-release.yml so the orchestrator stays purely declarative -- the matrix carries only logical tags.
 
 ## What moves where (concrete)
 
