@@ -242,10 +242,10 @@ So no Dependabot migration is required for the production Dockerfiles -- the ent
 
 | Phase | Work | Effort |
 |---|---|---|
-| 1a. Foundation on master | Path layout decisions, Docker Hub credential provisioning (org-level preferred), empty `docker-release-orchestrator.yml` skeleton. | ~1 day |
-| 1b. Flex + binary migration | Port both Dockerfiles, their build + test workflows, their BATS dirs. Prefix all moved workflow filenames with `docker-` (see "what moves where"). The flex workflows are lift-and-shift modulo the prefix -- the per-variant split serves the recently-refactored "add/remove alpine version = file add/delete" model. Also: rename existing `hadolint.yml` → `docker-lint-hadolint.yml` (fixes the 2 self-references inside it + the README badge URL); update `docker-compose-lint.yml` and renamed-hadolint includes to cover new Dockerfile paths. | ~1 day |
-| 1c. Master's release Dockerfile + orchestrator | Add `docker/release/`, `docker-build-release.yml` (reads tags from input), `docker-test-release.yml`, `tests/bats/docker/release/` skeleton. Build `docker-release-orchestrator.yml` with the matrix-driven fan-out + include/exclude inputs. Wire master's own self-dispatch and verify end-to-end. | ~1 day |
-| 2. Per rel-branch migration | For each rel-X.Y.Z: cherry-pick Dockerfile + the byte-identical `docker-build-release.yml` + `docker-test-release.yml` + `docker-test-bats.yml`, rename `tests/bats/X.Y.Z/` → `tests/bats/docker/release/`, strip hard-coded version prefixes, smoke-test via workflow_dispatch, add the new branch to master's orchestrator, then delete the matching `build-XXX.yml` and `tests/bats/X.Y.Z/` from devops. | ~0.5-1 day × N |
+| 1a. Foundation on master | **✅ Landed in openemr/openemr#12482.** Path layout resolved (use `docker/<thing>/` to match existing openemr core convention). Docker Hub credentials provisioned at the openemr org level. `docker-release-orchestrator.yml` skeleton committed -- inert until phase 1c wires `docker-build-release.yml` for it to dispatch. | ~1 day |
+| 1b. Flex + binary migration | **✅ Landed in openemr/openemr#12482, 8 commits.** Ports of `docker/{flex,binary}/`, `tests/bats/docker/{flex,binary}/`, `utilities/container_benchmarking/`, `.github/actions/test-actions-core/`, all flex build workflows (`docker-build-{flex-core,322,323,edge}.yml`), test workflows (`docker-test-{core,flex-322,flex-323,flex-edge,bats,container-functionality}.yml`), and `hadolint.yml` → `docker-lint-hadolint.yml` (plus README badge URL). Five intentional deviations from pure lift-and-shift: (1) the 50 MB `demo_5_0_0_5.sql` is **fetched at build time** from `raw.githubusercontent.com` pinned to a devops commit SHA with SHA256 verification (see "Large asset handling" section below), (2) a typo fix in `docker/flex/openemr.sh` (`defauly` → `default` in a code comment), (3) a codespell-driven style nudge in `docker/binary/utilities/devtoolsLibrary.source` (`runN` → `run1, run2, run3, ...` ellipsis to match the rest of the docstring), (4) `ubuntu-22.04` → `ubuntu-24.04` in `docker-test-bats.yml` to match repo convention, and (5) 8.1.0 paths + jobs deliberately dropped from `docker-test-bats.yml` and `docker-test-container-functionality.yml` -- restored in phase 1c when `docker/release/` lands. | ~1 day |
+| 1c. Master's release Dockerfile + orchestrator | Add `docker/release/`, `docker-build-release.yml` (reads tags from input), `docker-test-release.yml`, `tests/bats/docker/release/` skeleton. Wire `docker-release-orchestrator.yml` to actually dispatch (the matrix-driven skeleton landed in phase 1a). Verify master's self-dispatch end-to-end. Two carryovers from phase 1b: (a) restore the `bats-release` and `functionality-release` jobs (plus their `docker/release/**` paths) in `docker-test-bats.yml` and `docker-test-container-functionality.yml`, and (b) apply the same `runN` → ellipsis comment fix on `docker/release/utilities/devtoolsLibrary.source` (the file matches the devops `docker/openemr/8.1.1/utilities/devtoolsLibrary.source` that tracks master). Apply the same SHA-pinned + checksum-verified fetch pattern for `demo_5_0_0_5.sql` as in phase 1b. | ~1 day |
+| 2. Per rel-branch migration | For each rel-X.Y.Z: cherry-pick Dockerfile + the byte-identical `docker-build-release.yml` + `docker-test-release.yml` + `docker-test-bats.yml`, rename `tests/bats/X.Y.Z/` → `tests/bats/docker/release/`, strip hard-coded version prefixes, smoke-test via workflow_dispatch, add the new branch to master's orchestrator, then delete the matching `build-XXX.yml` and `tests/bats/X.Y.Z/` from devops. Apply the phase 1b deviations to each rel branch's port: SHA-pinned `demo_5_0_0_5.sql` fetch, the `runN` → ellipsis comment fix in `docker/release/utilities/devtoolsLibrary.source` (rel-810's file is at line 668 not 702 -- different because the function is at a different position in that older version), and any other codespell hits the rel-branch source happens to have. | ~0.5-1 day × N |
 | 3. Release tag automation | Replace cross-repo `repository_dispatch openemr-tag` (core → devops) with the in-repo `on: push: tags:` trigger already present on each rel branch's `docker-build-release.yml`. Sort out the existing devops `build-release.yml` (release packaging / tarballs) -- distinct from the docker build workflow; needs migration to core under a non-colliding name like `package-release.yml`. | ~1 day |
 | 4. Consumer auto-sync | Add an in-repo auto-PR step for digest pins in `docker/development-*` compose files after each push. | ~1 day |
 | 5. Devops cleanup | Delete migrated docker paths, BATS dirs, workflows. Remove dead dependabot entries. Add README banner pointing at new locations. Keep `openemr-cmd/`, `kubernetes/`, `tests/bats/openemr-cmd/`, and their workflows. | ~0.5 day |
@@ -263,6 +263,28 @@ Total active engineering: **~1.5 weeks** assuming 4 active rel branches. Calenda
 `docker-build-release.yml`, `docker-test-release.yml`, `docker-test-bats.yml`, BATS contents, dependabot, hadolint paths, lint configs -- none change at branch-cut, because `docker-build-release.yml` is identical across branches and the paths are uniform.
 
 When it's time to rotate `latest` (e.g., 8.1.0 graduates to GA): a two-line edit in master's orchestrator. No PR against either rel branch.
+
+## Large asset handling pattern (established in phase 1b)
+
+`docker/openemr/flex/utilities/demo_5_0_0_5.sql` is a 50 MB SQL dump used by the flex container's `dev-reset-install-demodata` flow. Committing 50 MB to openemr core would permanently bloat every contributor's clone for a single-use seed asset, so phase 1b established this pattern instead and the same pattern applies to any large asset encountered in later phases:
+
+1. **Don't carry the asset in git.** Skip the file entirely during the dir port.
+2. **Fetch at Dockerfile build time** from `raw.githubusercontent.com` pinned to a specific commit SHA in the source repo (devops, in this case). SHAs never change and stay valid even after the source path is later cleaned up in phase 5.
+3. **Verify with SHA256** to detect mid-flight corruption, URL drift, or a wrong-SHA bump.
+
+The Dockerfile pattern that landed in `docker/flex/Dockerfile`:
+
+```dockerfile
+ARG DEMO_SQL_REPO_SHA=441d7b3db5b8033822e0e3da462e7553a2330477
+ARG DEMO_SQL_SHA256=5d418c838446f3bdd4aa17d1276578106928a3ebcb27b40f4ab421694cc013d7
+RUN wget -O /root/demo_5_0_0_5.sql \
+    "https://raw.githubusercontent.com/openemr/openemr-devops/${DEMO_SQL_REPO_SHA}/docker/openemr/flex/utilities/demo_5_0_0_5.sql" \
+    && echo "${DEMO_SQL_SHA256}  /root/demo_5_0_0_5.sql" | sha256sum -c -
+```
+
+Bumping the demo data becomes a two-ARG change (pin a new SHA, update the checksum) rather than a 50 MB binary recommit. raw.githubusercontent.com serves files up to 100 MB; 50 MB is well within bounds. Build-time network is acceptable since the docker build already requires internet for apk packages anyway.
+
+When phase 5 cleans up `docker/openemr/flex/` from devops master, the SHA-pinned URL still works (raw.githubusercontent.com serves any commit by SHA, regardless of whether the path exists at HEAD).
 
 ## Decisions to lock before phase 1
 
