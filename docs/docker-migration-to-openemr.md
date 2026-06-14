@@ -89,7 +89,11 @@ Single source of truth for which branches build, which docker tags they push, an
 ```yaml
 # .github/release-targets.yml
 - branch: master
-  docker_tags: dev,next
+  # 8.1.1 is manually placed alongside dev/next floating aliases because
+  # version.php in master currently reports 8.1.1-dev. Bump when master
+  # moves to the next cycle. The docker_tag <-> version.php alignment
+  # guard in docker-validate-release-targets.yml catches drift on PRs.
+  docker_tags: 8.1.1,dev,next
   openemr_version_ref: master
 
 - branch: rel-810
@@ -314,13 +318,39 @@ So no Dependabot migration is required for the production Dockerfiles -- the ent
 |---|---|---|
 | 1a. Foundation on master | **✅ Landed in openemr/openemr#12482.** Path layout resolved (use `docker/<thing>/` to match existing openemr core convention). Docker Hub credentials provisioned at the openemr org level. `docker-release-orchestrator.yml` skeleton committed -- inert until phase 1c wires `docker-build-release.yml` for it to dispatch. | ~1 day |
 | 1b. Flex + binary migration | **✅ Landed in openemr/openemr#12482, 8 commits.** Ports of `docker/{flex,binary}/`, `tests/bats/docker/{flex,binary}/`, `utilities/container_benchmarking/`, `.github/actions/test-actions-core/`, all flex build workflows (`docker-build-{flex-core,322,323,edge}.yml`), test workflows (`docker-test-{core,flex-322,flex-323,flex-edge,bats,container-functionality}.yml`), and `hadolint.yml` → `docker-lint-hadolint.yml` (plus README badge URL). Five intentional deviations from pure lift-and-shift: (1) the 50 MB `demo_5_0_0_5.sql` is **fetched at build time** from `raw.githubusercontent.com` pinned to a devops commit SHA with SHA256 verification (see "Large asset handling" section below), (2) a typo fix in `docker/flex/openemr.sh` (`defauly` → `default` in a code comment), (3) a codespell-driven style nudge in `docker/binary/utilities/devtoolsLibrary.source` (`runN` → `run1, run2, run3, ...` ellipsis to match the rest of the docstring), (4) `ubuntu-22.04` → `ubuntu-24.04` in `docker-test-bats.yml` to match repo convention, and (5) 8.1.0 paths + jobs deliberately dropped from `docker-test-bats.yml` and `docker-test-container-functionality.yml` -- restored in phase 1c when `docker/release/` lands. | ~1 day |
-| 1c. Master's release Dockerfile + orchestrator | Add `docker/release/`, `docker-build-release.yml` (reads tags from input), `docker-test-release.yml`, `tests/bats/docker/release/` skeleton. Wire `docker-release-orchestrator.yml` to actually dispatch (the matrix-driven skeleton landed in phase 1a). Verify master's self-dispatch end-to-end. Two carryovers from phase 1b: (a) restore the `bats-release` and `functionality-release` jobs (plus their `docker/release/**` paths) in `docker-test-bats.yml` and `docker-test-container-functionality.yml`, and (b) apply the same `runN` → ellipsis comment fix on `docker/release/utilities/devtoolsLibrary.source` (the file matches the devops `docker/openemr/8.1.1/utilities/devtoolsLibrary.source` that tracks master). Apply the same SHA-pinned + checksum-verified fetch pattern for `demo_5_0_0_5.sql` as in phase 1b. | ~1 day |
+| 1c. Master's release Dockerfile + orchestrator | Add `docker/release/`, `docker-build-release.yml`, `docker-test-release.yml`, `tests/bats/docker/release/` skeleton. Restore the `bats-release` and `functionality-release` jobs deferred in phase 1b. Externalize release config to `.github/release-targets.yml`. Centralize `openemr_version_ref` so `docker/release/Dockerfile` is byte-identical across branches. Add four verification checks: OCI labels, version.php-derived `IMAGE_VERSION`, post-push label verification, `docker-validate-release-targets.yml` workflow (schema + git-ref-resolves + docker_tag↔version.php alignment guards). Apply `runN`→ellipsis fix and any other codespell hits during the port. | ~1.5 days |
 | 2. Per rel-branch migration | For each rel-X.Y.Z: cherry-pick Dockerfile + the byte-identical `docker-build-release.yml` + `docker-test-release.yml` + `docker-test-bats.yml`, rename `tests/bats/X.Y.Z/` → `tests/bats/docker/release/`, strip hard-coded version prefixes, smoke-test via workflow_dispatch, add the new branch to master's orchestrator, then delete the matching `build-XXX.yml` and `tests/bats/X.Y.Z/` from devops. Apply the phase 1b deviations to each rel branch's port: SHA-pinned `demo_5_0_0_5.sql` fetch, the `runN` → ellipsis comment fix in `docker/release/utilities/devtoolsLibrary.source` (rel-810's file is at line 668 not 702 -- different because the function is at a different position in that older version), and any other codespell hits the rel-branch source happens to have. | ~0.5-1 day × N |
 | 3. Release tag automation | Replace cross-repo `repository_dispatch openemr-tag` (core → devops) with the in-repo `on: push: tags:` trigger already present on each rel branch's `docker-build-release.yml`. Sort out the existing devops `build-release.yml` (release packaging / tarballs) -- distinct from the docker build workflow; needs migration to core under a non-colliding name like `package-release.yml`. | ~1 day |
 | 4. Consumer auto-sync | Add an in-repo auto-PR step for digest pins in `docker/development-*` compose files after each push. | ~1 day |
 | 5. Devops cleanup | Delete migrated docker paths, BATS dirs, workflows. Remove dead dependabot entries. Add README banner pointing at new locations. Keep `openemr-cmd/`, `kubernetes/`, `tests/bats/openemr-cmd/`, and their workflows. | ~0.5 day |
 
 Total active engineering: **~1.5 weeks** assuming 4 active rel branches. Calendar window will be longer to coordinate with active release activity.
+
+## Verification: how we know the right thing got built and pushed
+
+Four complementary checks assert that the image baked from `openemr_version_ref` actually carries that source, and that `release-targets.yml` doesn't drift from the openemr source it points at.
+
+1. **OCI labels on the published image.** `docker/release/Dockerfile` declares standard `org.opencontainers.image.*` labels populated from build-args:
+   - `revision` = `${OPENEMR_VERSION}` -- the git ref baked
+   - `version` = `${IMAGE_VERSION}` -- the human-facing release version, composed by the workflow from `version.php` at the resolved ref
+   - `created` = `${BUILD_DATE}`
+   - plus static `title`, `source`, `url`, `licenses`
+
+   Any consumer can `docker inspect openemr/openemr:8.1.0` and see exactly which openemr ref went in.
+
+2. **IMAGE_VERSION extraction from `version.php`.** A workflow step in `docker-build-release.yml` fetches `version.php` from `raw.githubusercontent.com` at the resolved `openemr_version_ref`, parses the five components (`$v_major`, `$v_minor`, `$v_patch`, `$v_tag`, `$v_realpatch`), composes the version string ("8.1.1-dev" for in-progress, "8.1.0" for GA, "8.1.0.1" for GA + patch), and passes it as `IMAGE_VERSION` to docker buildx. The source self-reports its version; the build pipeline doesn't have to guess.
+
+3. **Post-push label verification** in `docker-build-release.yml`. After buildx push completes, the workflow pulls the first pushed tag back and asserts both `revision` and `version` labels match what was requested. Catches: Dockerfile drops the ARG declarations, build-arg path through buildx breaks, someone hand-edits the Dockerfile to hardcode something. Build fails loudly with `::error::` if either label doesn't match.
+
+4. **PR-time validation of `release-targets.yml`** (`docker-validate-release-targets.yml`). Runs only on PRs touching the data file. Six guards:
+   1. Valid YAML.
+   2. Every row has all three required fields.
+   3. No duplicate branches.
+   4. No two rows pushing the same docker_tag.
+   5. Every `openemr_version_ref` resolves to a real ref in openemr/openemr (catches typos like `rel-8100` or `v8_1_0_`).
+   6. The first version-number `docker_tag` in each row aligns with the `major.minor.patch` composed from `version.php` at that row's `openemr_version_ref`. Catches the drift bug where master bumps `version.php` from `8.1.1-dev` to `8.1.2-dev` but `release-targets.yml` still says `docker_tags: 8.1.1,dev,next`.
+
+Together: the four checks make every published image self-documenting, assert build-time alignment, and assert config-time alignment. A release-management PR that bumps any of `version.php` / `release-targets.yml` / Dockerfile fails at PR time if the three drift apart.
 
 ## Branch-cut process under the final model
 
