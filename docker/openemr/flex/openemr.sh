@@ -808,6 +808,16 @@ if [[ "${NEED_COMPOSER_BUILD}" = "true" ]] || [[ "${NEED_NPM_BUILD}" = "true" ]]
     cd /var/www/localhost/htdocs
 fi
 
+# Two-pass kcov-wrapper.sh sets FLEX_BUILD_ONLY=yes on its first pass so the
+# heavy build (composer + npm + napa + webpack + phing) runs OUTSIDE kcov.
+# It then re-invokes openemr.sh under kcov with FORCE_NO_BUILD_MODE=yes so
+# the build block above short-circuits. Avoids kcov's ptrace following
+# webpack's worker tree (openemr-devops#797).
+if [[ "${FLEX_BUILD_ONLY:-}" = "yes" ]]; then
+    flex_timing 'build-only mode exit'
+    exit 0
+fi
+
 if [[ "${SWARM_WAIT_DEFERRED}" = "yes" ]]; then
     wait_for_swarm_completion
     SWARM_WAIT_DEFERRED=no
