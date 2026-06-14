@@ -52,7 +52,9 @@ set -euo pipefail
 # (openemr-devops#797). Silent everywhere else.
 flex_timing() {
     [[ "${OPENEMR_FLEX_TIMING:-}" = "1" ]] || return 0
-    printf 'TIMING: %s %s\n' "$(date +%s)" "$1"
+    local now
+    now=$(date +%s)
+    printf 'TIMING: %s %s\n' "${now}" "$1"
 }
 
 # ============================================================================
