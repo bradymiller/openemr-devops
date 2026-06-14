@@ -38,7 +38,8 @@ tests/bats/docker/release/                        ← BATS tests for master's "n
 .github/workflows/docker-test-bats.yml            ← runs tests/bats/docker/{flex,binary,release}/
 .github/workflows/docker-test-core.yml            ← reusable building block
 .github/workflows/docker-test-container-functionality.yml
-.github/workflows/docker-release-orchestrator.yml         ← schedule + fan-out via workflow_dispatch --ref
+.github/workflows/docker-release-orchestrator.yml         ← schedule + fan-out via workflow_dispatch --ref (reads release-targets.yml)
+.github/release-targets.yml                               ← release config as data: branch / docker_tags / openemr_version_ref per row
 ```
 
 **openemr/openemr `rel-X.Y.Z`** (each release branch):
@@ -53,13 +54,18 @@ tests/bats/docker/release/                        ← branch-local BATS tests, v
 
 No flex / no binary / no orchestrator / no test-core / no test-flex-* on rel branches. They are self-contained for their one production image.
 
-Per-branch tag mapping (defined in master's orchestrator, not the rel branches):
-- master → `dev`, `next`
-- `rel-810` → `8.1.0`, `latest`
-- `rel-800` → `8.0.0`
-- `rel-704` → `7.0.4`
+Per-branch release config (carried in `.github/release-targets.yml` on master; the orchestrator reads this file):
+
+| Branch | `docker_tags` | `openemr_version_ref` |
+|---|---|---|
+| master | `dev,next` | `master` |
+| `rel-810` | `8.1.0,latest` | `v8_1_0` |
+| `rel-800` | `8.0.0` | `v8_0_0` |
+| `rel-704` | `7.0.4` | `v7_0_4` |
 
 (`rel-811` doesn't exist yet; when it's cut from master, the standard branch-cut steps below add it.)
+
+`openemr_version_ref` is the git ref baked into the image as the `OPENEMR_VERSION` ARG. Decoupling it from `docker_tags` means a rel branch can stage post-release patches without affecting the published image until you cut a new tag (e.g. `v8_1_0_1`) and bump just `openemr_version_ref`.
 
 ## Validated foundation
 
@@ -69,15 +75,41 @@ This means: when master's `docker-release-orchestrator.yml` dispatches `docker-b
 
 ## Master orchestrates schedule AND tag assignment
 
-`docker-release-orchestrator.yml` on master does two jobs: it owns the cron tick (since GitHub Actions `schedule:` only fires from the default branch), and it owns the source of truth for which docker tags each branch should push. The orchestrator passes the tag list to each dispatched build as a `workflow_dispatch` input. Consequences:
+`docker-release-orchestrator.yml` on master does two jobs: it owns the cron tick (since GitHub Actions `schedule:` only fires from the default branch), and it dispatches each release build with the right config. The actual config lives in **`.github/release-targets.yml`** -- a flat YAML data file -- so the orchestrator workflow is pure mechanism and the data is the policy. Consequences:
 
-- `docker-build-release.yml` is **byte-identical** across master and every rel branch. The only per-branch differences are the Dockerfile contents and the BATS tests.
-- Tag promotion (rotating `latest`, bumping `next`) is a one-line edit on master -- no PR against the affected rel branch.
-- Branch-cut doesn't require editing the new rel branch's workflow file at all; just add a fan-out entry on master with the new branch's tag list.
+- `docker-build-release.yml` is **byte-identical** across master and every rel branch. So is `docker/release/Dockerfile` -- the per-branch source-tracking decision (`openemr_version_ref`) is passed in as a build-arg.
+- Tag promotion (rotating `latest`, bumping `next`) is a one-line edit in `release-targets.yml` on master -- no PR against the affected rel branch.
+- Promoting rel-810 to a `v8_1_0` release is a one-line edit changing that row's `openemr_version_ref` from `rel-810` to `v8_1_0`. Subsequent patches to rel-810 don't affect the published image until you cut `v8_1_0_1` and bump the field again.
+- Branch-cut: append one row to `release-targets.yml`. No edits to the new branch's Dockerfile or workflow files.
+
+### Release config data file (`.github/release-targets.yml`)
+
+Single source of truth for which branches build, which docker tags they push, and which openemr source ref they bake in. Tooling and bots can parse + edit it with any YAML library.
+
+```yaml
+# .github/release-targets.yml
+- branch: master
+  docker_tags: dev,next
+  openemr_version_ref: master
+
+- branch: rel-810
+  docker_tags: 8.1.0,latest
+  openemr_version_ref: v8_1_0   # release tag, not rel-810 HEAD
+
+- branch: rel-800
+  docker_tags: 8.0.0
+  openemr_version_ref: v8_0_0
+
+- branch: rel-704
+  docker_tags: 7.0.4
+  openemr_version_ref: v7_0_4
+```
+
+Naming chosen to be unambiguous: `docker_tags` (not just `tags`, which collides with git tags) and `openemr_version_ref` (not `openemr_version`, which would imply a version string rather than a git ref).
 
 ### Orchestrator skeleton (master)
 
-A single inline matrix is the source of truth for which branches build and which logical tags each pushes. Adding a rel branch is a one-row diff; rotating `latest` is a one-line diff.
+A `compute-matrix` job reads `release-targets.yml`, applies the include/exclude filter, and emits the matrix as JSON; a `fan-out` job consumes that matrix and dispatches one build per row.
 
 ```yaml
 # .github/workflows/docker-release-orchestrator.yml
@@ -100,42 +132,60 @@ permissions:
   contents: read
 
 jobs:
+  compute-matrix:
+    if: github.repository_owner == 'openemr' && github.repository == 'openemr/openemr' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.gen.outputs.matrix }}
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        sparse-checkout: |
+          .github/release-targets.yml
+    - id: gen
+      env:
+        INCLUDE: ${{ inputs.include || 'all' }}
+        EXCLUDE: ${{ inputs.exclude || '' }}
+        EVENT: ${{ github.event_name }}
+      run: |
+        # yq is preinstalled on github-hosted runners.
+        FILTERED=$(yq -o=json -I=0 . .github/release-targets.yml | jq -c \
+          --arg inc "$INCLUDE" --arg exc "$EXCLUDE" --arg ev "$EVENT" '
+          [ .[] |
+            . as $row |
+            select(
+              ($ev == "schedule") or
+              ($inc == "all") or
+              ($inc | split(",") | map(. == $row.branch) | any)
+            ) |
+            select(
+              ($exc | split(",") | map(. == $row.branch) | any) | not
+            )
+          ]
+        ')
+        echo "matrix={\"include\":$FILTERED}" >> "$GITHUB_OUTPUT"
+
   fan-out:
+    needs: compute-matrix
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
-      matrix:
-        include:
-        - branch: master
-          tags: 'dev,next'
-        - branch: rel-810
-          tags: '8.1.0,latest'
-        - branch: rel-800
-          tags: '8.0.0'
-        - branch: rel-704
-          tags: '7.0.4'
+      matrix: ${{ fromJSON(needs.compute-matrix.outputs.matrix) }}
     steps:
-    - name: Dispatch ${{ matrix.branch }} with tags ${{ matrix.tags }}
-      if: >-
-        ${{
-          (github.event_name == 'schedule'
-            || inputs.include == 'all'
-            || contains(format(',{0},', inputs.include), format(',{0},', matrix.branch)))
-          && !contains(format(',{0},', inputs.exclude), format(',{0},', matrix.branch))
-        }}
+    - name: Dispatch ${{ matrix.branch }} (docker_tags=${{ matrix.docker_tags }} openemr_version_ref=${{ matrix.openemr_version_ref }})
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
         gh workflow run docker-build-release.yml \
           --repo ${{ github.repository }} \
           --ref ${{ matrix.branch }} \
-          -f tags="${{ matrix.tags }}"
-        echo "Dispatched ${{ matrix.branch }} with tags=${{ matrix.tags }}"
+          -f docker_tags="${{ matrix.docker_tags }}" \
+          -f openemr_version_ref="${{ matrix.openemr_version_ref }}"
 ```
 
-The `format(',{0},', x)` wrapping in `contains()` is exact-match (prevents `rel-810` from substring-matching `rel-8100`). Cron runs (`github.event_name == 'schedule'`) bypass both `include` and `exclude` filters and run every matrix entry. Manual dispatch takes a text input -- type `all` (the default) for everything, or list specific branches like `rel-810,master`. The matrix-only design has no per-branch input cap, so it scales beyond GitHub's 10-input limit if releases ever accumulate.
+Cron runs (`event == 'schedule'`) bypass both filters and run every row. Manual dispatch takes string inputs -- type `all` (default) for everything, or specific branches like `rel-810,master`.
 
-The orchestrator carries **logical** tags only (`8.1.0,next`); docker-build-release.yml is responsible for expanding version-number tags into dated siblings -- see below.
+The orchestrator carries **logical** docker_tags only (`8.1.0,next`); `docker-build-release.yml` is responsible for expanding version-number tags into dated siblings -- see below.
 
 ### docker-build-release.yml (byte-identical across all branches)
 
@@ -144,11 +194,16 @@ The orchestrator carries **logical** tags only (`8.1.0,next`); docker-build-rele
 on:
   workflow_dispatch:
     inputs:
-      tags:
-        description: 'Comma-separated tags to push (e.g. "8.1.0,latest"; leave default for an ad-hoc test build)'
+      docker_tags:
+        description: 'Comma-separated docker tags to push (e.g. "8.1.0,latest"; leave default for an ad-hoc test build)'
         required: true
         type: string
         default: 'manual-test'
+      openemr_version_ref:
+        description: 'OpenEMR git ref to bake (branch, tag, or SHA). Empty = use the dispatching branch name.'
+        required: false
+        type: string
+        default: ''
   push:
     tags: ['v*']    # real release tagging; tag value drives docker tag
 
@@ -156,27 +211,27 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
 
     - name: Compute build date
       id: build_date
       run: echo "date=$(date +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
 
-    - name: Expand tag list (add dated variant for version-number tags)
-      id: tags
+    - name: Expand docker_tags list (add dated variant for version-number tags)
+      id: expand_docker_tags
       env:
-        INPUT_TAGS: ${{ inputs.tags }}
+        INPUT_TAGS: ${{ inputs.docker_tags }}
         BUILD_DATE: ${{ steps.build_date.outputs.date }}
       run: |
         {
-          echo 'tags<<EOF'
+          echo 'list<<EOF'
           IFS=',' read -ra TAGS <<< "$INPUT_TAGS"
           for t in "${TAGS[@]}"; do
             t="${t// /}"   # strip whitespace
             [ -z "$t" ] && continue
             echo "openemr/openemr:${t}"
             # Rule: version-number tags (digits and dots only) also get a dated sibling.
-            # "8.1.0" -> push "8.1.0" + "8.1.0-2026-06-12"
+            # "8.1.0" -> push "8.1.0" + "8.1.0-2026-06-13"
             # "next" / "dev" / "latest" / "manual-test" -> no dated variant.
             if [[ "$t" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
               echo "openemr/openemr:${t}-${BUILD_DATE}"
@@ -185,17 +240,32 @@ jobs:
           echo EOF
         } >> "$GITHUB_OUTPUT"
 
+    - name: Resolve openemr_version_ref (input, or fall back to dispatching branch / git tag)
+      id: resolve_openemr_version_ref
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        INPUT_REF: ${{ inputs.openemr_version_ref }}
+        REF_NAME: ${{ github.ref_name }}
+      run: |
+        if [ -n "$INPUT_REF" ]; then
+          echo "ref=$INPUT_REF" >> "$GITHUB_OUTPUT"
+        else
+          echo "ref=$REF_NAME" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: Build and push
       uses: docker/build-push-action@v6
       with:
         context: ./docker/release
         push: true
-        tags: ${{ steps.tags.outputs.tags }}
+        tags: ${{ steps.expand_docker_tags.outputs.list }}
+        build-args: |
+          OPENEMR_VERSION=${{ steps.resolve_openemr_version_ref.outputs.ref }}
 ```
 
-When the orchestrator dispatches `-f tags="8.1.0,latest"`, the build pushes `openemr/openemr:8.1.0`, `openemr/openemr:8.1.0-2026-06-12`, and `openemr/openemr:latest` -- the version-number `8.1.0` gets a dated sibling, the floating `latest` doesn't. When a maintainer manually dispatches for testing, the form pre-fills `manual-test` -- safe sentinel that never clobbers production tags, never gets a dated variant.
+When the orchestrator dispatches `-f docker_tags="8.1.0,latest" -f openemr_version_ref="v8_1_0"`, the build pushes `openemr/openemr:8.1.0`, `openemr/openemr:8.1.0-2026-06-13`, and `openemr/openemr:latest` (the version-number `8.1.0` gets a dated sibling, the floating `latest` doesn't) -- and bakes the `v8_1_0` tag of openemr/openemr as the source. When a maintainer manually dispatches for testing with no overrides, `docker_tags` defaults to `manual-test` (safe sentinel) and `openemr_version_ref` falls back to the dispatching branch name.
 
-The dated-tag rule matches the current devops convention (`date +'%Y-%m-%d'` from build-openemr.yml's tag-merge step) and lives in docker-build-release.yml so the orchestrator stays purely declarative -- the matrix carries only logical tags.
+The dated-tag rule matches the current devops convention (`date +'%Y-%m-%d'` from build-openemr.yml's tag-merge step). It lives in docker-build-release.yml so the orchestrator + release-targets.yml stay purely declarative -- only logical tags appear in config.
 
 ## What moves where (concrete)
 
@@ -254,15 +324,18 @@ Total active engineering: **~1.5 weeks** assuming 4 active rel branches. Calenda
 
 ## Branch-cut process under the final model
 
-3 steps when cutting a new `rel-X.Y.Z`:
+**2 steps** when cutting a new `rel-X.Y.Z`:
 
 1. Cut `rel-X.Y.Z` from master
-2. Pin `docker/release/Dockerfile` to X.Y.Z on the new branch
-3. Add a one-row matrix entry on master's `docker-release-orchestrator.yml` with the new branch's tag list
+2. Append one row to master's `.github/release-targets.yml` with the new branch's `docker_tags` and `openemr_version_ref`
 
-`docker-build-release.yml`, `docker-test-release.yml`, `docker-test-bats.yml`, BATS contents, dependabot, hadolint paths, lint configs -- none change at branch-cut, because `docker-build-release.yml` is identical across branches and the paths are uniform.
+`docker-build-release.yml`, `docker-test-release.yml`, `docker-test-bats.yml`, `docker/release/Dockerfile`, BATS contents, dependabot, hadolint paths, lint configs -- **none** change at branch-cut. The Dockerfile is byte-identical because the openemr source ref is passed in as a build-arg, not baked into the file.
 
-When it's time to rotate `latest` (e.g., 8.1.0 graduates to GA): a two-line edit in master's orchestrator. No PR against either rel branch.
+Tag-rotation, release promotion, and post-release patch handling are all one-line edits in `release-targets.yml`:
+
+- **Rotate `latest`** (e.g. 8.1.0 graduates to GA → 8.1.0 takes `latest` from 8.0.0): edit two rows' `docker_tags`. No PR against any rel branch.
+- **Promote rel-810 to v8_1_0 release**: edit that row's `openemr_version_ref` from `rel-810` to `v8_1_0`. Subsequent patches to rel-810 don't affect the published image until you bump again.
+- **Post-release patch flow** (cut `v8_1_0_1` from rel-810): edit that row's `openemr_version_ref` from `v8_1_0` to `v8_1_0_1`.
 
 ## Large asset handling pattern (established in phase 1b)
 
