@@ -35,3 +35,6 @@ jobs:
       php_versions: '["8.3", "8.4", "8.5"]'
       is_flex_coverage_docker: true
       flex_coverage_php_version: '8.5'
+      # Surface "TIMING:" markers in openemr.sh so we can localize the
+      # edge × 8.5 startup slowdown (openemr-devops#797). Edge-only.
+      flex_timing: true

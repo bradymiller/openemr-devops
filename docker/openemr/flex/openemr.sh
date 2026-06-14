@@ -44,6 +44,18 @@
 set -euo pipefail
 
 # ============================================================================
+# OPTIONAL STARTUP PHASE TIMING
+# ============================================================================
+# When OPENEMR_FLEX_TIMING=1, emit "TIMING:" markers at each long-running
+# startup phase. Enabled via env in test-flex-edge.yml to localize where
+# Alpine edge × PHP 8.5 exceeds the 10m healthcheck start_period
+# (openemr-devops#797). Silent everywhere else.
+flex_timing() {
+    [[ "${OPENEMR_FLEX_TIMING:-}" = "1" ]] || return 0
+    printf 'TIMING: %s %s\n' "$(date +%s)" "$1"
+}
+
+# ============================================================================
 # SHELL LIBRARY SOURCING
 # ============================================================================
 # Load helper functions from devtoolsLibrary.source
@@ -724,11 +736,13 @@ if [[ "${NEED_COMPOSER_BUILD}" = "true" ]] || [[ "${NEED_NPM_BUILD}" = "true" ]]
         fi
 
         # install php dependencies
+        flex_timing 'composer install start'
         if [[ "${DEVELOPER_TOOLS}" = "yes" ]]; then
             composer install
         else
             composer install --no-dev
         fi
+        flex_timing 'composer install done'
         RAN_ANY_BUILD=true
     fi
 
@@ -752,22 +766,29 @@ if [[ "${NEED_COMPOSER_BUILD}" = "true" ]] || [[ "${NEED_NPM_BUILD}" = "true" ]]
         if [[ -d public ]]; then
             chown -R apache:1000 public
         fi
+        flex_timing 'npm install (root) start (includes napa postinstall)'
         npm install --unsafe-perm
+        flex_timing 'npm install (root) done'
         # build css
+        flex_timing 'npm run build (webpack) start'
         npm run build
+        flex_timing 'npm run build (webpack) done'
         RAN_ANY_BUILD=true
     fi
 
     if [[ "${NEED_NPM_BUILD}" = "true" ]] && [[ -f /var/www/localhost/htdocs/openemr/ccdaservice/package.json ]]; then
         # install ccdaservice
+        flex_timing 'npm install (ccdaservice) start'
         cd /var/www/localhost/htdocs/openemr/ccdaservice
         npm install --unsafe-perm
         cd /var/www/localhost/htdocs/openemr
+        flex_timing 'npm install (ccdaservice) done'
         RAN_ANY_BUILD=true
     fi
 
     # clean up and optimize (only if we ran any builds)
     if [[ "${RAN_ANY_BUILD}" = "true" ]]; then
+        flex_timing 'phing + dump-autoload start'
         composer global require phing/phing
         /root/.composer/vendor/bin/phing vendor-clean
         /root/.composer/vendor/bin/phing assets-clean
@@ -775,6 +796,7 @@ if [[ "${NEED_COMPOSER_BUILD}" = "true" ]] || [[ "${NEED_NPM_BUILD}" = "true" ]]
 
         # optimize
         composer dump-autoload --optimize --apcu
+        flex_timing 'phing + dump-autoload done'
     fi
 
     cd /var/www/localhost/htdocs
@@ -1123,6 +1145,7 @@ echo " > https://opencollective.com/openemr/donate"
 echo
 
 if [[ "${OPERATOR}" = "yes" ]]; then
+    flex_timing 'apache exec'
     echo 'Starting apache!'
     exec /usr/sbin/httpd -D FOREGROUND
 fi

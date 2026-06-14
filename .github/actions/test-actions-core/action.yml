@@ -42,7 +42,9 @@ runs:
       working-directory: docker/openemr
 
     - name: Run the containers
-      run: docker compose up --detach --wait --wait-timeout 600 mysql "${OPENEMR_SERVICE_NAME}"
+      # --wait-timeout matches compose.yml openemr healthcheck start_period (20m).
+      # See openemr-devops#797 for context on the bump from 600 → 1200.
+      run: docker compose up --detach --wait --wait-timeout 1200 mysql "${OPENEMR_SERVICE_NAME}"
       shell: bash
       working-directory: docker/openemr
 
