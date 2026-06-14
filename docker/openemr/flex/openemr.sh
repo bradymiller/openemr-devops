@@ -54,7 +54,11 @@ flex_timing() {
     [[ "${OPENEMR_FLEX_TIMING:-}" = "1" ]] || return 0
     local now
     now=$(date +%s)
-    printf 'TIMING: %s %s\n' "${now}" "$1"
+    # Write to stderr: bash's stdout is fully-buffered when piped to docker,
+    # so small printf lines stay in the userspace buffer and get lost when
+    # the container is SIGKILLed at the healthcheck timeout. Stderr is
+    # line-buffered (or unbuffered) per C99, so the \n flushes immediately.
+    printf 'TIMING: %s %s\n' "${now}" "$1" >&2
 }
 
 # ============================================================================
