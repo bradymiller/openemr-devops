@@ -47,9 +47,9 @@ set -euo pipefail
 # OPTIONAL STARTUP PHASE TIMING
 # ============================================================================
 # When OPENEMR_FLEX_TIMING=1, emit "TIMING:" markers at each long-running
-# startup phase. Enabled via env in test-flex-edge.yml to localize where
-# Alpine edge × PHP 8.5 exceeds the 10m healthcheck start_period
-# (openemr-devops#797). Silent everywhere else.
+# startup phase. Enabled in the flex test workflows so any future startup
+# slowdown can be localized to a specific phase (openemr-devops#797).
+# Silent when the env var is unset or anything other than "1".
 flex_timing() {
     [[ "${OPENEMR_FLEX_TIMING:-}" = "1" ]] || return 0
     local now

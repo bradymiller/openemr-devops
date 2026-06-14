@@ -36,8 +36,8 @@ services:
       MYSQL_USER: openemr
       OE_PASS: pass
       OE_USER: admin
-      # Pass-through default empty. test-flex-edge sets this to '1' to
-      # emit phase timing in openemr.sh (openemr-devops#797).
+      # Pass-through default empty. Flex workflows set this to '1' to emit
+      # phase timing in openemr.sh (openemr-devops#797).
       OPENEMR_FLEX_TIMING: ${OPENEMR_FLEX_TIMING:-}
     healthcheck:
       test:
@@ -45,13 +45,7 @@ services:
       - curl
       - -fsSLo/dev/null
       - http://localhost/
-      # 20m start_period (was 10m): the openemr.sh runtime setup (composer +
-      # npm + napa + webpack + phing) grew past 10m on Alpine edge × PHP 8.5
-      # CI runners after openemr/openemr#11231 landed the webpack migration.
-      # Keep the upper bound generous; healthy runs return early when curl
-      # succeeds, so this only matters when something is genuinely stuck.
-      # See openemr-devops#797.
-      start_period: 20m
+      start_period: 10m
       start_interval: 10s
       interval: 1m
       timeout: 5s
