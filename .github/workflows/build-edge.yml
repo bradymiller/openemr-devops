@@ -13,9 +13,13 @@ name: Flex Edge Dockers Nightly Build
 # The is_default_flex environment variable is used to determine if this is the default flex image.
 #  (This is NOT the default flex image, so is_default_flex is false)
 on:
+  # Schedule disabled as part of the docker-image migration to
+  # openemr/openemr core. The flex-edge nightly tags are now published
+  # by openemr/openemr's docker-build-edge.yml (06:00 UTC). This file
+  # stays here with workflow_dispatch as a manual escape hatch only,
+  # slated for deletion in phase 5 of the migration. See
+  # openemr-devops#790 for the migration tracking issue.
   workflow_dispatch:
-  schedule:
-    - cron: '0 2 * * *' # run at 2 AM UTC
 
 jobs:
   build:

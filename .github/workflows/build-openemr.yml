@@ -7,9 +7,16 @@ name: OpenEMR Docker Build (current/next/dev)
 # so this file holds no version strings and never needs rewriting.
 
 on:
+  # Schedule disabled as part of the docker-image migration to
+  # openemr/openemr core. The current/next/dev rotating slot tags
+  # (each currently resolving to 8.0.0/8.1.0/8.1.1 respectively, plus
+  # the version-numbered and date-suffixed variants) are now published
+  # by openemr/openemr's docker-release-orchestrator.yml fanning out to
+  # the rel-800, rel-810, and master rows of .github/release-targets.yml
+  # (06:00 UTC). This file stays here with workflow_dispatch as a
+  # manual escape hatch only, slated for deletion in phase 5 of the
+  # migration. See openemr-devops#790 for the migration tracking issue.
   workflow_dispatch:
-  schedule:
-    - cron: '0 2 * * *' # run at 2 AM UTC
 
 jobs:
   build:

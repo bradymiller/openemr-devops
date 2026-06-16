@@ -1,9 +1,15 @@
 name: Production 7.0.4 Docker Build
 
 on:
+  # Schedule disabled as part of the docker-image migration to
+  # openemr/openemr core. The 7.0.4 production tag (plus 7.0.4.0 and
+  # the date-suffixed variant) is now published by openemr/openemr's
+  # docker-release-orchestrator.yml fanning out to the rel-704 row in
+  # .github/release-targets.yml (06:00 UTC). This file stays here
+  # with workflow_dispatch as a manual escape hatch only, slated for
+  # deletion in phase 5 of the migration. See openemr-devops#790
+  # for the migration tracking issue.
   workflow_dispatch:
-  schedule:
-    - cron: '0 2 * * *' # run at 2 AM UTC
 
 jobs:
   build:
