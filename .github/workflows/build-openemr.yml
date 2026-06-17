@@ -145,9 +145,3 @@ jobs:
             tags+=(-t "openemr/openemr:${DIR}")
           fi
           docker buildx imagetools create "${tags[@]}" "${digests[@]}"
-
-      - name: Push Docker Hub readme
-        uses: ./.github/actions/push-dockerhub-readme
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
