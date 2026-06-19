@@ -127,8 +127,6 @@ excludes:
     reason: "legacy 7.0.4 support track (entire dir)"
 
   # Frozen historical builds.
-  - path: docker/openemr/obsolete
-    reason: "frozen historical builds; never rotate"
   - path: docker/obsolete
     reason: "frozen historical builds; never rotate"
   - path: kubernetes/obsolete
