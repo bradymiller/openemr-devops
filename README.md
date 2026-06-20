@@ -1,21 +1,11 @@
 [![ShellCheck](https://github.com/openemr/openemr-devops/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/openemr/openemr-devops/actions/workflows/shellcheck.yml)
-[![Dockerfile Linting](https://github.com/openemr/openemr-devops/actions/workflows/hadolint.yml/badge.svg)](https://github.com/openemr/openemr-devops/actions/workflows/hadolint.yml)
 [![Docker Compose Linting](https://github.com/openemr/openemr-devops/actions/workflows/dclint.yml/badge.svg)](https://github.com/openemr/openemr-devops/actions/workflows/dclint.yml)
-[![BATS Tests](https://github.com/openemr/openemr-devops/actions/workflows/test-bats.yml/badge.svg)](https://github.com/openemr/openemr-devops/actions/workflows/test-bats.yml)
-[![Container Functionality](https://github.com/openemr/openemr-devops/actions/workflows/test-container-functionality.yml/badge.svg)](https://github.com/openemr/openemr-devops/actions/workflows/test-container-functionality.yml)
-[![Production Docker Test](https://github.com/openemr/openemr-devops/actions/workflows/test-production.yml/badge.svg)](https://github.com/openemr/openemr-devops/actions/workflows/test-production.yml)
 
 # openemr-devops
 
 OpenEMR administration and deployment tooling
 
 ## Resource Index
-
-### Components and Infrastructure
-
-* [Official OpenEMR Docker](docker/openemr): Source repository for the [Docker](https://hub.docker.com/r/openemr/openemr/) library
-  * **Production Docker Testing**: Automated workflow verifies production OpenEMR Docker images (versioned releases like 7.0.4) can build correctly and function with database connections. Tests include unit, fixtures, services, validators, and controllers suites.
-  * **Flex Docker Testing**: Automated workflow tests development-oriented "flex" Docker images designed for development where OpenEMR code is mounted separately rather than embedded in the image.
 
 ### Deployment Options
 
