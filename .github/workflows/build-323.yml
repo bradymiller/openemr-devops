@@ -16,9 +16,14 @@ name: Flex 3.23 Dockers Build
 # (ENSURE TO MAKE THIS (is_default_flex) FALSE WHEN A NEW ALPINE VERSION TAKES OVER AS THE DEFAULT!)
 
 on:
+  # Schedule disabled as part of the docker-image migration to
+  # openemr/openemr core. The flex-3.23 nightly tags (including the
+  # bare `flex` default) are now published by openemr/openemr's
+  # docker-build-323.yml (06:00 UTC). This file stays here with
+  # workflow_dispatch as a manual escape hatch only, slated for
+  # deletion in phase 5 of the migration. See openemr-devops#790
+  # for the migration tracking issue.
   workflow_dispatch:
-  schedule:
-    - cron: '0 2 * * *' # run at 2 AM UTC
 
 jobs:
   build:
