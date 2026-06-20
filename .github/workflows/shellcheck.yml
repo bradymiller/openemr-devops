@@ -7,11 +7,9 @@ on:
     # There are five places in here we must keep
     # the paths in sync and the exclusion logic.
     paths:
-      # Include all shell scripts except those in docker/openemr/obsolete/
       - '**.sh'
       - '**.source'
       - '.github/workflows/shellcheck.yml'
-      - 'docker/openemr/flex-*/utilities/devtools'
       - 'kubernetes/kub-down'
       - 'kubernetes/kub-up'
       - 'packages/standard/cfn/buildstacks.bat'  # ¯\_(ツ)_/¯
@@ -20,19 +18,17 @@ on:
       - 'utilities/openemr-env-installer/openemr-env-installer'
       - 'utilities/openemr-env-migrator/openemr-env-migrator'
       - 'utilities/openemr-monitor/monitor-installer'
-      # Exclude everything in obsolete.
+      # Exclude everything in obsolete (defensive -- docker/obsolete/
+      # currently has no shell scripts but might in the future).
       # This needs to be last.
-      - '!docker/openemr/obsolete/**'
       - '!docker/obsolete/**'
   pull_request:
     branches:
       - master
     paths:
-      # Include all shell scripts except those in docker/openemr/obsolete/
       - '**.sh'
       - '**.source'
       - '.github/workflows/shellcheck.yml'
-      - 'docker/openemr/flex-*/utilities/devtools'
       - 'kubernetes/kub-down'
       - 'kubernetes/kub-up'
       - 'packages/standard/cfn/buildstacks.bat'  # ¯\_(ツ)_/¯
@@ -41,9 +37,9 @@ on:
       - 'utilities/openemr-env-installer/openemr-env-installer'
       - 'utilities/openemr-env-migrator/openemr-env-migrator'
       - 'utilities/openemr-monitor/monitor-installer'
-      # Exclude everything in obsolete.
+      # Exclude everything in obsolete (defensive -- docker/obsolete/
+      # currently has no shell scripts but might in the future).
       # This needs to be last.
-      - '!docker/openemr/obsolete/**'
       - '!docker/obsolete/**'
 jobs:
   shellcheck:
@@ -71,7 +67,6 @@ jobs:
           files: |
             **.sh
             **.source
-            docker/openemr/flex-*/utilities/devtools
             kubernetes/kub-down
             kubernetes/kub-up
             packages/standard/cfn/buildstacks.bat
@@ -80,7 +75,6 @@ jobs:
             utilities/openemr-env-installer/openemr-env-installer
             utilities/openemr-env-migrator/openemr-env-migrator
             utilities/openemr-monitor/monitor-installer
-            !docker/openemr/obsolete/**
       - name: Create unique files list
         id: unique-files
         run: |
@@ -108,7 +102,6 @@ jobs:
             files_to_check+=(
               **/*.sh
               **/*.source
-              docker/openemr/flex-*/utilities/devtools
               kubernetes/kub-down
               kubernetes/kub-up
               packages/standard/cfn/buildstacks.bat
@@ -125,8 +118,7 @@ jobs:
           for file in "${files_to_check[@]}"; do
             [[ -f "$file" ]] || continue
             # Skip files in the obsolete directory
-            [[ "$file" = docker/openemr/obsolete/* ]] && continue
-            [[ "$file" = docker/obsolete/* ]] && continue 
+            [[ "$file" = docker/obsolete/* ]] && continue
             # Get hash of file content
             hash=$(sha256sum "$file" | cut -d ' ' -f 1)
             # Check if we've seen this hash before

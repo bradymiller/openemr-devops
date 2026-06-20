@@ -76,9 +76,9 @@ final class VersionsRegistryLinterTest extends TestCase
 
     public function testExcludedDirectoryIsSkipped(): void
     {
-        $this->writeFileAndAdd('docker/openemr/obsolete/old/Dockerfile', "ARG OPENEMR_VERSION=rel-700\n");
+        $this->writeFileAndAdd('docker/obsolete/old/Dockerfile', "ARG OPENEMR_VERSION=rel-700\n");
         $this->updateRegistry([], [
-            ['path' => 'docker/openemr/obsolete', 'reason' => 'frozen historical builds'],
+            ['path' => 'docker/obsolete', 'reason' => 'frozen historical builds'],
         ]);
 
         $issues = (new VersionsRegistryLinter($this->tmpDir, $this->registryPath))->lint();
