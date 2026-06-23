@@ -26,6 +26,11 @@ on:
       - 'utilities/openemr-cmd/openemr-cmd-h'
   workflow_dispatch:
 
+# Read-only GITHUB_TOKEN — the workflow only clones public repos, pulls a
+# public image, and runs containers locally; no write surfaces touched.
+permissions:
+  contents: read
+
 # Multiple in-flight runs would race on docker daemon resources (image
 # pull, container names, port allocation). Serialize per ref.
 concurrency:
@@ -42,6 +47,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           path: openemr-devops
+          persist-credentials: false
 
       - name: Install openemr-cmd to /usr/local/bin
         run: |
@@ -55,6 +61,7 @@ jobs:
           repository: openemr/openemr
           path: openemr
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Pre-flight (versions + disk)
         run: |
@@ -111,7 +118,11 @@ jobs:
           # Once health is healthy, /meta/health/readyz returns 200; the
           # bare / serves the login redirect (302/303).
           for i in $(seq 1 12); do
-            code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:8301/" || true)
+            # --connect-timeout/--max-time keep one bad iteration from
+            # eating the whole loop budget if the local TCP path is wedged.
+            code=$(curl -s -o /dev/null -w "%{http_code}" \
+                --connect-timeout 5 --max-time 10 \
+                "http://localhost:8301/" || true)
             echo "[${i}/12] HTTP ${code}"
             case "${code}" in
               200|302|303) exit 0 ;;
