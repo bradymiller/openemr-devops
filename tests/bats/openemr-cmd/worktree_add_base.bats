@@ -57,13 +57,19 @@ run_resolve() {
     run_resolve "file://${TMP_ROOT}#master"
     assert_success
     # FETCH_HEAD appears on the last line; the wt_info chatter is above it.
-    [[ "${lines[-1]}" = "FETCH_HEAD" ]]
+    # A SHA appears on its own line; wt_info chatter is above it. Use
+    # assert_line (per-line match) so the anchors work, and a regex so
+    # we don't have to plumb the expected SHA in. Bash 3.2 compatible.
+    assert_line --regexp '^[0-9a-f]{40}$'
 }
 
 @test "wt_resolve_base: file:// URL without #ref defaults to master" {
     run_resolve "file://${TMP_ROOT}"
     assert_success
-    [[ "${lines[-1]}" = "FETCH_HEAD" ]]
+    # A SHA appears on its own line; wt_info chatter is above it. Use
+    # assert_line (per-line match) so the anchors work, and a regex so
+    # we don't have to plumb the expected SHA in. Bash 3.2 compatible.
+    assert_line --regexp '^[0-9a-f]{40}$'
 }
 
 @test "wt_resolve_base: URL fetch failure returns non-zero with 'fetch failed' hint" {
@@ -171,4 +177,28 @@ run_resolve() {
         "${SCRIPT}" worktree add feat -b --base
     assert_failure
     assert_output --partial "--base requires a value"
+}
+
+# --- help-block drift guard --------------------------------------------------
+# openemr-cmd has TWO worktree-add usage blocks:
+#   1. top-level `openemr-cmd -h` (in the main usage block)
+#   2. `openemr-cmd worktree` no-subcommand fallback (in cmd_worktree())
+# Both must surface --base so users running either get current info.
+
+@test "help drift: top-level -h surfaces --base on the worktree add line" {
+    STUB_DIR=$(oc_make_docker_stub_dir)
+    run env PATH="${STUB_DIR}:$PATH" "${SCRIPT}" -h
+    # USAGE_EXIT_CODE=13; openemr-cmd -h exits non-zero by design.
+    assert_output --partial "[--base <ref>]"
+}
+
+@test "help drift: 'worktree' (no subcommand) fallback surfaces --base" {
+    STUB_DIR=$(oc_make_docker_stub_dir)
+    run env \
+        PATH="${STUB_DIR}:$PATH" \
+        OPENEMR_ROOT="${TMP_ROOT}" \
+        WORKTREE_PARENT="$(dirname "${TMP_ROOT}")" \
+        "${SCRIPT}" worktree
+    assert_failure
+    assert_output --partial "[--base <ref>]"
 }

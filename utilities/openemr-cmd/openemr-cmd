@@ -69,7 +69,7 @@ wt_require_cmd() {
 #
 # Two forms:
 #   URL (https://, git@, ssh://, git://, file://) optionally with "#<ref>"
-#       -> fetch <url> <ref> (default ref: master); echo FETCH_HEAD
+#       -> fetch <url> <ref> (default ref: master); echo a stable SHA
 #       This is the form intended for AI assistants and any caller that
 #       wants a freshly-fetched, fully-reproducible base independent of
 #       local repo state. The primary's HEAD is never read.
@@ -82,6 +82,31 @@ wt_require_cmd() {
 #
 # The default behavior (no --base supplied) is NOT routed through this
 # helper; the caller fetches canonical openemr/openemr master directly.
+#
+# Concurrency: the URL form fetches into a per-invocation temp ref
+# (refs/wt-base-tmp/<pid>-<rand>) and immediately resolves to an immutable
+# SHA. This avoids the FETCH_HEAD race where a second concurrent fetch in
+# the same primary repo would overwrite FETCH_HEAD before the caller's
+# `git worktree add` consumed it. wt_fetch_to_sha encapsulates the pattern.
+wt_fetch_to_sha() {
+    local url="$1" ref="$2"
+    local tmpref="refs/wt-base-tmp/$$-${RANDOM}-${RANDOM}"
+    if ! git -C "${OPENEMR_ROOT}" fetch --quiet "${url}" "${ref}:${tmpref}" >&2; then
+        wt_info "fetch failed; check the URL and ref" >&2
+        return 1
+    fi
+    local sha
+    sha=$(git -C "${OPENEMR_ROOT}" rev-parse --verify --quiet "${tmpref}")
+    local rc=$?
+    # Best-effort cleanup; refs/wt-base-tmp/* are harmless if orphaned.
+    git -C "${OPENEMR_ROOT}" update-ref -d "${tmpref}" 2>/dev/null || true
+    if [[ ${rc} -ne 0 ]]; then
+        wt_info "fetched ${ref} but could not resolve to a SHA" >&2
+        return 1
+    fi
+    echo "${sha}"
+}
+
 wt_resolve_base() {
     local arg="$1"
     local url ref
@@ -95,12 +120,8 @@ wt_resolve_base() {
             ref="master"
         fi
         wt_info "Fetching ${ref} from ${url}" >&2
-        if ! git -C "${OPENEMR_ROOT}" fetch --quiet "${url}" "${ref}" >&2; then
-            wt_info "fetch failed; check the URL and ref" >&2
-            return 1
-        fi
-        echo "FETCH_HEAD"
-        return 0
+        wt_fetch_to_sha "${url}" "${ref}"
+        return $?
     fi
 
     if ! git -C "${OPENEMR_ROOT}" rev-parse --verify --quiet "${arg}^{commit}" >/dev/null; then
@@ -578,12 +599,14 @@ cmd_worktree_add() {
             # Default: fetch canonical openemr/openemr master fresh. Primary
             # HEAD is never read, so concurrent worktree creation by multiple
             # agents is safe regardless of which branch is checked out in the
-            # primary repo.
+            # primary repo. Fetched via wt_fetch_to_sha so the resolved base
+            # is a stable SHA, not the shared mutable FETCH_HEAD ref.
             wt_info "Fetching master from openemr/openemr (canonical)"
-            git -C "${OPENEMR_ROOT}" fetch --quiet "${WT_CANONICAL_URL}" master \
+            # shellcheck disable=SC2310  # function uses explicit return, not set -e
+            resolved_base=$(wt_fetch_to_sha "${WT_CANONICAL_URL}" master) \
                 || wt_die "Failed to fetch master from ${WT_CANONICAL_URL}"
-            resolved_base="FETCH_HEAD"
         else
+            # shellcheck disable=SC2310  # function uses explicit return, not set -e
             resolved_base=$(wt_resolve_base "${base}") \
                 || wt_die "Failed to resolve --base '${base}' (see hints above)"
         fi
@@ -1048,8 +1071,12 @@ cmd_worktree() {
         *)
             echo "Usage: openemr-cmd worktree <add|remove|up|down|start|stop|exec|list|regen|set-env|prune> [options]"
             echo ""
-            echo "  add <branch> [-b] [--env easy|easy-light|easy-redis] [--start]"
-            echo "                            Create worktree (-b creates new branch, default env: easy)"
+            echo "  add <branch> [-b] [--base <ref>] [--env easy|easy-light|easy-redis] [--start]"
+            echo "                            Create worktree (default env: easy)"
+            echo "                            -b           : create new branch; default base is canonical openemr/openemr master (fetched fresh)"
+            echo "                            --base <ref> : (with -b) base on a specific ref. Two forms:"
+            echo "                                             <url>[#<ref>]  -> fetch from URL (e.g. https://github.com/openemr/openemr.git#rel-810)"
+            echo "                                             <commit-ish>   -> standard git resolution (local branch, origin/master, tag, SHA, HEAD, ...)"
             echo "  remove <branch> [--keep-volumes] Remove worktree (volumes deleted by default)"
             echo "  up <branch>               Start Docker stack for worktree"
             echo "  down <branch> [--keep-volumes]  Stop Docker stack for worktree (volumes deleted by default)"
