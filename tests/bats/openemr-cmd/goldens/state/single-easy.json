@@ -1,0 +1,7 @@
+{
+  "golden-easy": {
+    "offset": 1,
+    "dir": "__TMP_PARENT__/openemr-wt-golden-easy",
+    "env": "easy"
+  }
+}
