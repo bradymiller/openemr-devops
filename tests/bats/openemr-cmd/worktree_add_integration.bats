@@ -203,3 +203,47 @@ run_add() {
     # State key is the branch as-passed, NOT the slug.
     [[ "$(jq -r '."feature/foo-bar".dir' "${TMP_ROOT}/.worktrees.json")" = "${wt_dir}" ]]
 }
+
+# --- post-add summary URL rendering -----------------------------------------
+# The script prints HTTP/HTTPS/phpMyAdmin/Mailpit/CouchDB/Redis/MySQL URLs
+# with port = base + offset. Easy to regress (someone bumps a base port and
+# forgets the corresponding echo line); these guard the printed math.
+
+@test "summary lines: easy env at offset 1 prints OpenEMR/phpMyAdmin/Mailpit/CouchDB/MySQL" {
+    run_add summary-easy -b
+    assert_success
+    assert_output --partial "OpenEMR   : https://localhost:9301"
+    assert_output --partial "phpMyAdmin: http://localhost:8311"
+    assert_output --partial "Mailpit   : http://localhost:8026"
+    assert_output --partial "CouchDB   : http://localhost:5985"
+    assert_output --partial "MySQL     : localhost:8321"
+    refute_output --partial "Redis"
+}
+
+@test "summary lines: easy-light at offset 1 omits Mailpit/CouchDB/Redis" {
+    run_add summary-light -b --env easy-light
+    assert_success
+    assert_output --partial "OpenEMR   : https://localhost:9301"
+    assert_output --partial "MySQL     : localhost:8321"
+    refute_output --partial "Mailpit"
+    refute_output --partial "CouchDB"
+    refute_output --partial "Redis"
+}
+
+@test "summary lines: easy-redis at offset 1 includes Redis URL" {
+    run_add summary-redis -b --env easy-redis
+    assert_success
+    assert_output --partial "Redis     : localhost:6380"
+    assert_output --partial "Mailpit   : http://localhost:8026"
+}
+
+# --- --env validation at the cmd level --------------------------------------
+# wt_validate_env alone is covered in helpers_pure.bats; this asserts that
+# `worktree add --env bogus` actually surfaces that validation up through
+# cmd_worktree_add (the dispatcher path that real users invoke).
+
+@test "add --env <bogus>: cmd_worktree_add surfaces wt_validate_env error" {
+    run_add some-branch -b --env totally-not-a-real-env
+    assert_failure
+    assert_output --partial "Invalid env 'totally-not-a-real-env'"
+}

@@ -55,7 +55,14 @@ oc_make_docker_stub_dir() {
 # 'docker compose' (plugin probe) call must succeed so
 # check_docker_compose_install picks the plugin path; everything else
 # also returns 0. The shim does NOT shell out anywhere.
+#
+# 'docker compose ... ps ...' invocations echo the DOCKER_PS_OUTPUT
+# env var (default: empty) so tests can simulate "stack is up" / "stack
+# is down" without standing up real containers.
 echo "\$@" >> "${log}"
+case " \$* " in
+    *' ps '*) [ -n "\${DOCKER_PS_OUTPUT-}" ] && echo "\${DOCKER_PS_OUTPUT}" ;;
+esac
 if [ "\${1-}" = "compose" ]; then
     exit 0
 fi
