@@ -33,20 +33,30 @@ oc_mktempdir() {
 
 # Build a PATH-stubs directory containing a 'docker' shim that responds to
 # 'docker compose' (no args, plugin probe) with exit 0 and ignores everything
-# else with empty output and exit 0. The shim does NOT shell out anywhere.
+# else with empty output and exit 0. The shim records every invocation to
+# ${stub_dir}/docker.log (one line per call, space-joined args) so tests can
+# assert on the exact compose invocations the script made.
 #
 # Usage:
 #   stub_dir=$(oc_make_docker_stub_dir)
-#   PATH="${stub_dir}:$PATH" run "$SCRIPT" worktree list
+#   PATH="${stub_dir}:$PATH" run "$SCRIPT" worktree up <branch>
+#   grep -- '-p openemr-<slug>' "${stub_dir}/docker.log"
 oc_make_docker_stub_dir() {
-    local d
+    local d log
     d=$(oc_mktempdir)
-    cat > "${d}/docker" <<'STUB'
+    log="${d}/docker.log"
+    : > "${log}"
+    # Heredoc unquoted to interpolate ${log} (the absolute log path);
+    # $@/$1/etc. are escaped so they stay literal in the stub script.
+    cat > "${d}/docker" <<STUB
 #!/bin/sh
 # Predictable stub of 'docker' used by openemr-cmd BATS tests.
-# 'docker compose' (plugin probe) must succeed so check_docker_compose_install
-# picks the plugin path; everything else returns empty/0.
-if [ "${1-}" = "compose" ]; then
+# Records each invocation to ${log} for caller-side assertions. The
+# 'docker compose' (plugin probe) call must succeed so
+# check_docker_compose_install picks the plugin path; everything else
+# also returns 0. The shim does NOT shell out anywhere.
+echo "\$@" >> "${log}"
+if [ "\${1-}" = "compose" ]; then
     exit 0
 fi
 exit 0
@@ -94,6 +104,32 @@ oc_init_repo() {
     : > "${dir}/.placeholder"
     git -C "${dir}" add .placeholder
     git -C "${dir}" commit --quiet -m "init" >/dev/null
+}
+
+# Initialize $1 as a real git repo AND commit the docker/ layout that
+# cmd_worktree_add expects to find on the base ref it checks out: each env's
+# docker/development-<env>/ subdir (with a placeholder docker-compose.yml so
+# the path can be passed to docker via -f) plus docker/library/ (resolved by
+# wt_write_override for bind-mounts). After this, the repo's master tip is a
+# commit that any subsequent `git worktree add ... master` (or canonical fetch
+# via file://${repo}) will check out and have everything cmd_worktree_add
+# needs to write its override + .env files without tripping the no-symlink /
+# no-traversal guards.
+#
+# Usage:
+#   oc_init_repo_with_fixtures "${TMP_ROOT}"
+oc_init_repo_with_fixtures() {
+    local dir=$1
+    oc_init_repo "${dir}"
+    mkdir -p "${dir}/docker/library"
+    : > "${dir}/docker/library/.placeholder"
+    local env
+    for env in easy easy-light easy-redis; do
+        mkdir -p "${dir}/docker/development-${env}"
+        echo "# bats fixture compose for ${env}" > "${dir}/docker/development-${env}/docker-compose.yml"
+    done
+    git -C "${dir}" add docker
+    git -C "${dir}" commit --quiet -m "fixture: docker dirs for openemr-cmd worktree add"
 }
 
 # Register a new git worktree on a new branch under <wt-parent>/<dirname>.
