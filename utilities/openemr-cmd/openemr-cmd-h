@@ -38,7 +38,7 @@ fi
 # Use ${FIRST_ARG}
 case "${FIRST_ARG}" in
     worktree)
-        filter_help_output worktree-management 16
+        filter_help_output worktree-management 17
         ;;
     docker)
         filter_help_output docker-management 10

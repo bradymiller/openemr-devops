@@ -63,26 +63,30 @@ wt_require_cmd() {
     done
 }
 
-# Resolve a worktree-add --base argument to a local commit-ish suitable for
-# `git worktree add -b ... <commit-ish>`. Echoes the resolved ref to stdout;
-# all human-readable progress goes to stderr. Performs the network fetch as a
-# side effect — the primary repo's HEAD is never read or modified, so this is
-# safe to call concurrently from multiple agents.
+# Resolve a worktree-add --base argument to a commit-ish that
+# `git worktree add -b ... <commit-ish>` can use. Echoes the resolved ref to
+# stdout; human-readable progress and errors go to stderr.
 #
-# Dispatch (in order):
-#   URL (https://, git@, ssh://, git://), optionally with "#<ref>"
-#       -> fetch <url> <ref>          ; echo FETCH_HEAD
-#   SHA already present in local object db (7-40 hex chars)
-#       -> no fetch                   ; echo <sha>
-#   <remote>/<ref> where <remote> is a configured local remote
-#       -> fetch <remote> <ref>       ; echo <remote>/<ref>
-#   bare ref name (master, rel-810, v8_0_0_3, refs/tags/v8.1.1, ...)
-#       -> fetch <canonical> <ref>    ; echo FETCH_HEAD
+# Two forms:
+#   URL (https://, git@, ssh://, git://, file://) optionally with "#<ref>"
+#       -> fetch <url> <ref> (default ref: master); echo FETCH_HEAD
+#       This is the form intended for AI assistants and any caller that
+#       wants a freshly-fetched, fully-reproducible base independent of
+#       local repo state. The primary's HEAD is never read.
+#   anything else
+#       -> pure git <commit-ish> semantics. Hand the arg to git as-is so
+#          it resolves via the standard rev-parse rules: local branch
+#          name, remote-tracking ref (origin/master), tag, SHA, HEAD,
+#          @{u}, etc. No fetch happens — freshness is the caller's
+#          responsibility (a normal `git fetch <remote>` ahead of time).
+#
+# The default behavior (no --base supplied) is NOT routed through this
+# helper; the caller fetches canonical openemr/openemr master directly.
 wt_resolve_base() {
     local arg="$1"
-    local url ref prefix rest
+    local url ref
 
-    if [[ "${arg}" =~ ^(https?://|git@|ssh://|git://) ]]; then
+    if [[ "${arg}" =~ ^(https?://|git@|ssh://|git://|file://) ]]; then
         if [[ "${arg}" == *"#"* ]]; then
             url="${arg%%#*}"
             ref="${arg#*#}"
@@ -91,33 +95,21 @@ wt_resolve_base() {
             ref="master"
         fi
         wt_info "Fetching ${ref} from ${url}" >&2
-        git -C "${OPENEMR_ROOT}" fetch --quiet "${url}" "${ref}" >&2 || return 1
+        if ! git -C "${OPENEMR_ROOT}" fetch --quiet "${url}" "${ref}" >&2; then
+            wt_info "fetch failed; check the URL and ref" >&2
+            return 1
+        fi
         echo "FETCH_HEAD"
         return 0
     fi
 
-    if [[ "${arg}" =~ ^[0-9a-fA-F]{7,40}$ ]] \
-        && git -C "${OPENEMR_ROOT}" rev-parse --verify --quiet "${arg}^{commit}" >/dev/null
-    then
-        echo "${arg}"
-        return 0
+    if ! git -C "${OPENEMR_ROOT}" rev-parse --verify --quiet "${arg}^{commit}" >/dev/null; then
+        wt_info "'${arg}' is not a URL and does not resolve as a local git ref" >&2
+        wt_info "to fetch '${arg}' from canonical openemr/openemr, use:" >&2
+        wt_info "  --base ${WT_CANONICAL_URL}#${arg}" >&2
+        return 1
     fi
-
-    if [[ "${arg}" == */* ]]; then
-        prefix="${arg%%/*}"
-        rest="${arg#*/}"
-        if git -C "${OPENEMR_ROOT}" config --get "remote.${prefix}.url" >/dev/null 2>&1; then
-            wt_info "Fetching ${rest} from remote '${prefix}'" >&2
-            git -C "${OPENEMR_ROOT}" fetch --quiet "${prefix}" "${rest}" >&2 || return 1
-            echo "${prefix}/${rest}"
-            return 0
-        fi
-        # Else fall through and treat as bare ref against canonical.
-    fi
-
-    wt_info "Fetching ${arg} from openemr/openemr (canonical)" >&2
-    git -C "${OPENEMR_ROOT}" fetch --quiet "${WT_CANONICAL_URL}" "${arg}" >&2 || return 1
-    echo "FETCH_HEAD"
+    echo "${arg}"
     return 0
 }
 
@@ -582,10 +574,22 @@ cmd_worktree_add() {
     wt_info "Creating git worktree for '${branch}' at ${dir}"
     if ${new_branch}; then
         local resolved_base
-        resolved_base=$(wt_resolve_base "${base:-master}") || wt_die "Failed to resolve base ref '${base:-master}'"
-        # --no-track keeps the new feature branch from inheriting the base's
-        # remote-tracking config; matches the previous "branch off HEAD with
-        # no tracking" behavior of `git worktree add -b <branch> <dir>`.
+        if [[ -z "${base}" ]]; then
+            # Default: fetch canonical openemr/openemr master fresh. Primary
+            # HEAD is never read, so concurrent worktree creation by multiple
+            # agents is safe regardless of which branch is checked out in the
+            # primary repo.
+            wt_info "Fetching master from openemr/openemr (canonical)"
+            git -C "${OPENEMR_ROOT}" fetch --quiet "${WT_CANONICAL_URL}" master \
+                || wt_die "Failed to fetch master from ${WT_CANONICAL_URL}"
+            resolved_base="FETCH_HEAD"
+        else
+            resolved_base=$(wt_resolve_base "${base}") \
+                || wt_die "Failed to resolve --base '${base}' (see hints above)"
+        fi
+        # --no-track keeps the new feature branch from inheriting the base
+        # ref's remote-tracking config; matches the previous "branch off HEAD
+        # with no tracking" behavior of `git worktree add -b <branch> <dir>`.
         git -C "${OPENEMR_ROOT}" worktree add --no-track -b "${branch}" "${dir}" "${resolved_base}"
     else
         git -C "${OPENEMR_ROOT}" worktree add "${dir}" "${branch}"
@@ -1577,9 +1581,10 @@ if [[ $# -eq 0 || "${FIRST_ARG}" = '--help' || "${FIRST_ARG}" = '-h' ]]; then
     echo 'worktree-management:'
     echo "  worktree add <branch> [-b] [--base <ref>] [--env easy|easy-light|easy-redis] [--start]"
     echo "                                     Create worktree (default env: easy)"
-    echo "                                     -b           : create new branch; defaults to canonical openemr/openemr master (fetched from GitHub)"
-    echo "                                     --base <ref> : (with -b) base the new branch on a different ref:"
-    echo "                                                    bare name (rel-810, v8_0_0_3), <remote>/<ref>, <url>[#<ref>], or local SHA"
+    echo "                                     -b           : create new branch; default base is canonical openemr/openemr master (fetched fresh)"
+    echo "                                     --base <ref> : (with -b) base on a specific ref. Two forms:"
+    echo "                                                      <url>[#<ref>]  -> fetch from URL (e.g. https://github.com/openemr/openemr.git#rel-810)"
+    echo "                                                      <commit-ish>   -> standard git resolution (local branch, origin/master, tag, SHA, HEAD, ...)"
     echo "  worktree remove <branch> [--keep-volumes] Remove worktree (volumes deleted by default)"
     echo "  worktree up <branch>               Start Docker stack for a worktree"
     echo "  worktree down <branch> [--keep-volumes]  Stop Docker stack (volumes deleted by default)"
