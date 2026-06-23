@@ -7,8 +7,9 @@ name: openemr-cmd e2e (real docker)
 # `worktree down` + `worktree remove` and verifies state hygiene.
 #
 # Cost: ~10-20 min per run (image pull + container init + healthcheck
-# start_period: 3m). Triggered only on push to master + manual dispatch
-# so PR cycle stays fast.
+# start_period: 3m). Runs on every PR that touches openemr-cmd or this
+# workflow file — slower PR cycle is the deliberate trade for catching
+# regressions before merge rather than after.
 
 on:
   push:
@@ -17,15 +18,13 @@ on:
       - '.github/workflows/test-bats-openemr-cmd-real-docker.yml'
       - 'utilities/openemr-cmd/openemr-cmd'
       - 'utilities/openemr-cmd/openemr-cmd-h'
-  workflow_dispatch:
-  # TEMPORARY: pull_request trigger is on so this PR's CI runs the workflow
-  # once for end-to-end validation. To be removed in the final commit on
-  # this PR before merge — Tier 2 is push-to-master + manual-dispatch only
-  # by design (each run is 10-20 min and would slow every PR otherwise).
   pull_request:
     branches: [master]
     paths:
       - '.github/workflows/test-bats-openemr-cmd-real-docker.yml'
+      - 'utilities/openemr-cmd/openemr-cmd'
+      - 'utilities/openemr-cmd/openemr-cmd-h'
+  workflow_dispatch:
 
 # Multiple in-flight runs would race on docker daemon resources (image
 # pull, container names, port allocation). Serialize per ref.
