@@ -1,0 +1,191 @@
+name: openemr-cmd e2e (real docker)
+
+# Tier 2 of the openemr-cmd test coverage roadmap. Unlike the hermetic
+# bats suite (test-bats-openemr-cmd.yml), this workflow exercises
+# `openemr-cmd worktree add --start` against a real openemr/openemr
+# image, waits for the openemr container to become healthy, then runs
+# `worktree down` + `worktree remove` and verifies state hygiene.
+#
+# Cost: ~10-20 min per run (image pull + container init + healthcheck
+# start_period: 3m). Runs on every PR that touches openemr-cmd or this
+# workflow file — slower PR cycle is the deliberate trade for catching
+# regressions before merge rather than after.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/test-bats-openemr-cmd-real-docker.yml'
+      - 'utilities/openemr-cmd/openemr-cmd'
+      - 'utilities/openemr-cmd/openemr-cmd-h'
+  pull_request:
+    branches: [master]
+    paths:
+      - '.github/workflows/test-bats-openemr-cmd-real-docker.yml'
+      - 'utilities/openemr-cmd/openemr-cmd'
+      - 'utilities/openemr-cmd/openemr-cmd-h'
+  workflow_dispatch:
+
+# Read-only GITHUB_TOKEN — the workflow only clones public repos, pulls a
+# public image, and runs containers locally; no write surfaces touched.
+permissions:
+  contents: read
+
+# Multiple in-flight runs would race on docker daemon resources (image
+# pull, container names, port allocation). Serialize per ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  worktree-lifecycle-e2e:
+    name: e2e — add --start → healthy → down → remove
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout openemr-devops (for openemr-cmd)
+        uses: actions/checkout@v7
+        with:
+          path: openemr-devops
+          persist-credentials: false
+
+      - name: Install openemr-cmd to /usr/local/bin
+        run: |
+          sudo install -m 0755 openemr-devops/utilities/openemr-cmd/openemr-cmd /usr/local/bin/openemr-cmd
+          # --version exits 14 by design (VERSION_EXIT_CODE); don't fail the step.
+          openemr-cmd --version || true
+
+      - name: Clone openemr/openemr (shallow)
+        uses: actions/checkout@v7
+        with:
+          repository: openemr/openemr
+          path: openemr
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Pre-flight (versions + disk)
+        run: |
+          docker --version
+          docker compose version
+          jq --version
+          realpath --version | head -1
+          df -h /
+
+      - name: worktree add test-e2e -b --base master --start
+        working-directory: openemr
+        env:
+          # --base master uses the local commit we just cloned, skipping the
+          # canonical-URL fetch (the fetch behavior is covered by the
+          # hermetic bats suite; this workflow is about the docker side).
+          WT_CANONICAL_URL: file://${{ github.workspace }}/openemr
+        run: |
+          openemr-cmd worktree add test-e2e -b --base master --start
+          openemr-cmd worktree list
+
+      - name: Wait for openemr container to become healthy
+        run: |
+          # Compose project naming: openemr-<slug>; service: openemr; replica: 1.
+          cname="openemr-test-e2e-openemr-1"
+          echo "polling docker inspect for ${cname} health (healthcheck has start_period: 3m)..."
+          # The openemr healthcheck has start_period: 3m and start_interval: 10s,
+          # so the earliest "healthy" can appear is around 10s into the run, but
+          # in practice MySQL init + composer install + sites bootstrap push it
+          # to several minutes. Poll for up to ~15 min.
+          for i in $(seq 1 90); do
+            status=$(docker inspect --format='{{.State.Health.Status}}' "${cname}" 2>/dev/null || echo "missing")
+            echo "[${i}/90 @ $((i*10))s] status=${status}"
+            case "${status}" in
+              healthy)
+                echo "container reported healthy"
+                exit 0
+                ;;
+              unhealthy)
+                echo "FAIL: container reported unhealthy"
+                docker logs "${cname}" --tail 200
+                exit 1
+                ;;
+            esac
+            sleep 10
+          done
+          echo "FAIL: container never became healthy in ~15 min"
+          docker ps -a
+          docker logs "${cname}" --tail 500
+          exit 1
+
+      - name: HTTP smoke (openemr responds on port 8301)
+        run: |
+          # WT_HTTP_PORT = 8300 + offset (=1 for first worktree).
+          # Once health is healthy, /meta/health/readyz returns 200; the
+          # bare / serves the login redirect (302/303).
+          for i in $(seq 1 12); do
+            # --connect-timeout/--max-time keep one bad iteration from
+            # eating the whole loop budget if the local TCP path is wedged.
+            code=$(curl -s -o /dev/null -w "%{http_code}" \
+                --connect-timeout 5 --max-time 10 \
+                "http://localhost:8301/" || true)
+            echo "[${i}/12] HTTP ${code}"
+            case "${code}" in
+              200|302|303) exit 0 ;;
+            esac
+            sleep 5
+          done
+          echo "FAIL: openemr did not respond with 2xx/3xx on port 8301"
+          exit 1
+
+      - name: worktree down test-e2e --keep-volumes
+        working-directory: openemr
+        run: openemr-cmd worktree down test-e2e --keep-volumes
+
+      - name: worktree remove test-e2e
+        working-directory: openemr
+        run: |
+          # The openemr container writes files into the worktree's bind-mount
+          # volumes as a non-runner uid (apache, root, etc.). After the stack
+          # has run, those files exist on disk owned by uids the runner user
+          # can't touch — so `git worktree remove --force` (which does
+          # `rm -rf` under the hood) fails with Permission denied. Pre-chown
+          # the worktree dir so the removal can proceed.
+          # This is the same workaround devs hit when removing a worktree
+          # whose container wrote files as a non-host uid; CI is just the
+          # most reliable trigger for it.
+          sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}/openemr-wt-test-e2e"
+          # `remove` prompts; pipe 'y' to confirm.
+          echo y | openemr-cmd worktree remove test-e2e
+
+      - name: Verify state hygiene
+        working-directory: openemr
+        run: |
+          # State entry should be gone from .worktrees.json.
+          if jq -e '."test-e2e"' .worktrees.json 2>/dev/null; then
+            echo "FAIL: state entry still present"
+            cat .worktrees.json
+            exit 1
+          fi
+          # Worktree dir should be gone from WORKTREE_PARENT (= parent of openemr/).
+          if [ -d "${{ github.workspace }}/openemr-wt-test-e2e" ]; then
+            echo "FAIL: worktree dir still on disk"
+            exit 1
+          fi
+          # Compose project's volumes should be gone (remove without
+          # --keep-volumes calls `down --volumes` under the hood).
+          remaining=$(docker volume ls -q --filter "name=openemr-test-e2e_" | wc -l)
+          if [ "${remaining}" -ne 0 ]; then
+            echo "FAIL: ${remaining} compose volumes left over:"
+            docker volume ls --filter "name=openemr-test-e2e_"
+            exit 1
+          fi
+          echo "state clean"
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          echo "===== docker ps -a ====="
+          docker ps -a || true
+          echo "===== .worktrees.json ====="
+          cat openemr/.worktrees.json 2>/dev/null || true
+          echo "===== docker volume ls ====="
+          docker volume ls || true
+          echo "===== openemr container logs (last 500) ====="
+          docker logs openemr-test-e2e-openemr-1 --tail 500 2>/dev/null || true
+          echo "===== mysql container logs (last 200) ====="
+          docker logs openemr-test-e2e-mysql-1 --tail 200 2>/dev/null || true
