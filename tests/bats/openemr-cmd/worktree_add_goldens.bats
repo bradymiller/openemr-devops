@@ -50,11 +50,19 @@ run_add() {
 }
 
 # Mask runtime-variable absolute paths so the golden is reproducible across
-# machines/runs. The only varying component in our fixture paths is the
-# 6-char mktemp suffix on /tmp/openemr-cmd-XXXXXX; everything inside is
-# stable (TMP_ROOT = TMP_PARENT/primary, worktrees at TMP_PARENT/openemr-wt-*).
+# machines/runs. The fixture's varying component is the mktemp suffix; the
+# prefix varies by platform:
+#
+#   Linux:        /tmp/openemr-cmd-XXXXXX
+#   macOS:        /var/folders/<2ch>/<hash>/T/openemr-cmd-XXXXXX
+#   macOS (realpath-resolved): /private/var/folders/...
+#
+# Inside the masked prefix everything is stable (TMP_ROOT = TMP_PARENT/primary,
+# worktrees at TMP_PARENT/openemr-wt-*).
 mask_paths() {
-    sed -E 's|/tmp/openemr-cmd-[A-Za-z0-9]+|__TMP_PARENT__|g'
+    sed -E \
+        -e 's|/tmp/openemr-cmd-[A-Za-z0-9]+|__TMP_PARENT__|g' \
+        -e 's|(/private)?/var/folders/[^/]+/[^/]+/T/openemr-cmd-[A-Za-z0-9]+|__TMP_PARENT__|g'
 }
 
 # Compare ${actual_file} against the golden at ${golden_path}. If
