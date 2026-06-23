@@ -180,3 +180,62 @@ compose_call_line() {
     # State unchanged.
     [[ "$(jq -r '."feature-j".env' "${TMP_ROOT}/.worktrees.json")" = "easy" ]]
 }
+
+@test "set-env: easy -> easy-light rewrites compose dir + state, strips selenium/couchdb/mailpit/redis vars" {
+    setup_worktree feature-k -b
+    run_oc worktree set-env feature-k easy-light
+    assert_success
+    [[ "$(jq -r '."feature-k".env' "${TMP_ROOT}/.worktrees.json")" = "easy-light" ]]
+    local envf="${TMP_PARENT}/openemr-wt-feature-k/docker/development-easy-light/.env"
+    [[ -f "${envf}" ]]
+    ! grep -q "^WT_SELENIUM_PORT="    "${envf}"
+    ! grep -q "^WT_COUCHDB_PORT="     "${envf}"
+    ! grep -q "^WT_MAILPIT_UI_PORT="  "${envf}"
+    ! grep -q "^WT_REDIS_PORT="       "${envf}"
+}
+
+@test "set-env: easy-redis -> easy strips redis-specific container_name overrides from the new override" {
+    setup_worktree feature-l -b --env easy-redis
+    run_oc worktree set-env feature-l easy
+    assert_success
+    [[ "$(jq -r '."feature-l".env' "${TMP_ROOT}/.worktrees.json")" = "easy" ]]
+    local new_ovf="${TMP_PARENT}/openemr-wt-feature-l/docker/development-easy/docker-compose.override.yml"
+    [[ -f "${new_ovf}" ]]
+    ! grep -q "redis-master:" "${new_ovf}"
+    ! grep -q "redis-replica" "${new_ovf}"
+    ! grep -q "sentinel"      "${new_ovf}"
+}
+
+@test "set-env: refuses when target env's docker-compose.yml is missing from the checkout" {
+    setup_worktree feature-m -b
+    # Simulate an older branch that predates easy-redis: delete its compose file.
+    rm -f "${TMP_PARENT}/openemr-wt-feature-m/docker/development-easy-redis/docker-compose.yml"
+    run_oc worktree set-env feature-m easy-redis
+    assert_failure
+    assert_output --partial "New env's compose file not found"
+    # State unchanged.
+    [[ "$(jq -r '."feature-m".env' "${TMP_ROOT}/.worktrees.json")" = "easy" ]]
+}
+
+# --- regen error paths ------------------------------------------------------
+
+@test "regen: missing branch arg shows usage" {
+    setup_worktree feature-regen-usage -b
+    run_oc worktree regen
+    assert_failure
+    assert_output --partial "Usage: openemr-cmd worktree regen <branch>"
+}
+
+@test "regen: state file missing dies with 'No worktrees found'" {
+    # No worktree setup, no state file.
+    run_oc worktree regen anything
+    assert_failure
+    assert_output --partial "No worktrees found"
+}
+
+@test "regen: unknown branch dies with 'No worktree found for'" {
+    setup_worktree feature-known -b
+    run_oc worktree regen feature-unknown
+    assert_failure
+    assert_output --partial "No worktree found for 'feature-unknown'"
+}

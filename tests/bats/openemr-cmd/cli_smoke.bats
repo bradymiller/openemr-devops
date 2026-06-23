@@ -88,3 +88,38 @@ teardown() {
     assert_success
     assert_output --partial "(no worktrees)"
 }
+
+# --- -d <container> global flag ---------------------------------------------
+# `openemr-cmd -d <id> <cmd> [args...]` sets CONTAINER_ID and dispatches
+# the command into that container instead of the default openemr one.
+# This is the same path `worktree exec` re-execs into after resolving the
+# container by label.
+
+@test "openemr-cmd -d with no value exits 25 (CHANGE_CONTAINER_CODE) with usage hint" {
+    run env PATH="${STUB_DIR}:$PATH" "$SCRIPT" -d
+    # CHANGE_CONTAINER_CODE=25 per the script.
+    [[ "$status" -eq 25 ]] || fail "expected exit 25; got ${status}"
+    assert_output --partial "Please provide a docker id/name when using -d parameter"
+}
+
+@test "openemr-cmd -d with id but no command exits 25" {
+    run env PATH="${STUB_DIR}:$PATH" "$SCRIPT" -d some-container
+    [[ "$status" -eq 25 ]] || fail "expected exit 25; got ${status}"
+}
+
+@test "openemr-cmd -d does NOT shadow the worktree subcommand on a normal invocation" {
+    # Sanity check that the -d branch only fires when -d is FIRST_ARG;
+    # a normal `worktree list` (no -d) still gets dispatched as a worktree
+    # subcommand. Catches a regression that mis-parses -d anywhere on the
+    # command line.
+    echo '{}' > "${TMP_ROOT}/.worktrees.json"
+    run env \
+        PATH="${STUB_DIR}:$PATH" \
+        OPENEMR_ROOT="${TMP_ROOT}" \
+        WORKTREE_PARENT="$(dirname "${TMP_ROOT}")" \
+        "$SCRIPT" worktree list
+    assert_success
+    assert_output --partial "(no worktrees)"
+    # The error message from the -d branch must NOT appear.
+    refute_output --partial "Please provide a docker id/name when using -d"
+}
