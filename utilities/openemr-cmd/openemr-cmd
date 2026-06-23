@@ -18,7 +18,7 @@ set -euo pipefail
 #################################################################################################
 
 # Increment the version when modify script
-VERSION="1.0.41"
+VERSION="1.0.42"
 
 # ============================================================================
 # WORKTREE STATE MANAGEMENT
@@ -49,6 +49,11 @@ WT_STATE_FILE="${OPENEMR_ROOT}/.worktrees.json"
 VALID_ENVS=("easy" "easy-light" "easy-redis")
 DEFAULT_ENV="easy"
 
+# Canonical openemr/openemr source-of-truth URL used as the default base when
+# creating new branches via `worktree add -b`. Public read over HTTPS so no
+# auth and no named remote required. Override with WT_CANONICAL_URL.
+WT_CANONICAL_URL="${WT_CANONICAL_URL:-https://github.com/openemr/openemr.git}"
+
 wt_die()  { echo "error: $*" >&2; exit 1; }
 wt_info() { echo "  --> $*"; }
 
@@ -56,6 +61,77 @@ wt_require_cmd() {
     for cmd in "$@"; do
         if ! command -v "${cmd}" &>/dev/null; then wt_die "'${cmd}' is required but not found"; fi
     done
+}
+
+# Resolve a worktree-add --base argument to a commit-ish that
+# `git worktree add -b ... <commit-ish>` can use. Echoes the resolved ref to
+# stdout; human-readable progress and errors go to stderr.
+#
+# Two forms:
+#   URL (https://, git@, ssh://, git://, file://) optionally with "#<ref>"
+#       -> fetch <url> <ref> (default ref: master); echo a stable SHA
+#       This is the form intended for AI assistants and any caller that
+#       wants a freshly-fetched, fully-reproducible base independent of
+#       local repo state. The primary's HEAD is never read.
+#   anything else
+#       -> pure git <commit-ish> semantics. Hand the arg to git as-is so
+#          it resolves via the standard rev-parse rules: local branch
+#          name, remote-tracking ref (origin/master), tag, SHA, HEAD,
+#          @{u}, etc. No fetch happens — freshness is the caller's
+#          responsibility (a normal `git fetch <remote>` ahead of time).
+#
+# The default behavior (no --base supplied) is NOT routed through this
+# helper; the caller fetches canonical openemr/openemr master directly.
+#
+# Concurrency: the URL form fetches into a per-invocation temp ref
+# (refs/wt-base-tmp/<pid>-<rand>) and immediately resolves to an immutable
+# SHA. This avoids the FETCH_HEAD race where a second concurrent fetch in
+# the same primary repo would overwrite FETCH_HEAD before the caller's
+# `git worktree add` consumed it. wt_fetch_to_sha encapsulates the pattern.
+wt_fetch_to_sha() {
+    local url="$1" ref="$2"
+    local tmpref="refs/wt-base-tmp/$$-${RANDOM}-${RANDOM}"
+    if ! git -C "${OPENEMR_ROOT}" fetch --quiet "${url}" "${ref}:${tmpref}" >&2; then
+        wt_info "fetch failed; check the URL and ref" >&2
+        return 1
+    fi
+    local sha
+    sha=$(git -C "${OPENEMR_ROOT}" rev-parse --verify --quiet "${tmpref}")
+    local rc=$?
+    # Best-effort cleanup; refs/wt-base-tmp/* are harmless if orphaned.
+    git -C "${OPENEMR_ROOT}" update-ref -d "${tmpref}" 2>/dev/null || true
+    if [[ ${rc} -ne 0 ]]; then
+        wt_info "fetched ${ref} but could not resolve to a SHA" >&2
+        return 1
+    fi
+    echo "${sha}"
+}
+
+wt_resolve_base() {
+    local arg="$1"
+    local url ref
+
+    if [[ "${arg}" =~ ^(https?://|git@|ssh://|git://|file://) ]]; then
+        if [[ "${arg}" == *"#"* ]]; then
+            url="${arg%%#*}"
+            ref="${arg#*#}"
+        else
+            url="${arg}"
+            ref="master"
+        fi
+        wt_info "Fetching ${ref} from ${url}" >&2
+        wt_fetch_to_sha "${url}" "${ref}"
+        return $?
+    fi
+
+    if ! git -C "${OPENEMR_ROOT}" rev-parse --verify --quiet "${arg}^{commit}" >/dev/null; then
+        wt_info "'${arg}' is not a URL and does not resolve as a local git ref" >&2
+        wt_info "to fetch '${arg}' from canonical openemr/openemr, use:" >&2
+        wt_info "  --base ${WT_CANONICAL_URL}#${arg}" >&2
+        return 1
+    fi
+    echo "${arg}"
+    return 0
 }
 
 # realpath flag support differs by platform: GNU coreutils has -e/-m; the
@@ -481,18 +557,20 @@ wt_compose_cmd() {
 
 # shellcheck disable=SC2004
 cmd_worktree_add() {
-    local branch="" env="${DEFAULT_ENV}" start=false new_branch=false
+    local branch="" env="${DEFAULT_ENV}" start=false new_branch=false base=""
 
     while [[ $# -gt 0 ]]; do
         case $1 in
             --env)           if [[ -z "${2:-}" ]]; then wt_die "--env requires a value"; fi; env=$2; shift 2 ;;
+            --base)          if [[ -z "${2:-}" ]]; then wt_die "--base requires a value"; fi; base=$2; shift 2 ;;
             --start)         start=true; shift ;;
             -b|--new-branch) new_branch=true; shift ;;
             -*)              wt_die "Unknown option: $1" ;;
             *)               if [[ -z "${branch}" ]]; then branch=$1; else wt_die "Unexpected argument: $1"; fi; shift ;;
         esac
     done
-    if [[ -z "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree add <branch> [-b] [--env easy|easy-light|easy-redis] [--start]"; fi
+    if [[ -z "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree add <branch> [-b] [--base <ref>] [--env easy|easy-light|easy-redis] [--start]"; fi
+    if [[ -n "${base}" && ! "${new_branch}" == true ]]; then wt_die "--base only applies with -b (it picks the base for a new branch)"; fi
 
     wt_require_cmd git docker jq realpath
     wt_validate_env "${env}"
@@ -516,7 +594,26 @@ cmd_worktree_add() {
 
     wt_info "Creating git worktree for '${branch}' at ${dir}"
     if ${new_branch}; then
-        git -C "${OPENEMR_ROOT}" worktree add -b "${branch}" "${dir}"
+        local resolved_base
+        if [[ -z "${base}" ]]; then
+            # Default: fetch canonical openemr/openemr master fresh. Primary
+            # HEAD is never read, so concurrent worktree creation by multiple
+            # agents is safe regardless of which branch is checked out in the
+            # primary repo. Fetched via wt_fetch_to_sha so the resolved base
+            # is a stable SHA, not the shared mutable FETCH_HEAD ref.
+            wt_info "Fetching master from openemr/openemr (canonical)"
+            # shellcheck disable=SC2310  # function uses explicit return, not set -e
+            resolved_base=$(wt_fetch_to_sha "${WT_CANONICAL_URL}" master) \
+                || wt_die "Failed to fetch master from ${WT_CANONICAL_URL}"
+        else
+            # shellcheck disable=SC2310  # function uses explicit return, not set -e
+            resolved_base=$(wt_resolve_base "${base}") \
+                || wt_die "Failed to resolve --base '${base}' (see hints above)"
+        fi
+        # --no-track keeps the new feature branch from inheriting the base
+        # ref's remote-tracking config; matches the previous "branch off HEAD
+        # with no tracking" behavior of `git worktree add -b <branch> <dir>`.
+        git -C "${OPENEMR_ROOT}" worktree add --no-track -b "${branch}" "${dir}" "${resolved_base}"
     else
         git -C "${OPENEMR_ROOT}" worktree add "${dir}" "${branch}"
     fi
@@ -974,8 +1071,12 @@ cmd_worktree() {
         *)
             echo "Usage: openemr-cmd worktree <add|remove|up|down|start|stop|exec|list|regen|set-env|prune> [options]"
             echo ""
-            echo "  add <branch> [-b] [--env easy|easy-light|easy-redis] [--start]"
-            echo "                            Create worktree (-b creates new branch, default env: easy)"
+            echo "  add <branch> [-b] [--base <ref>] [--env easy|easy-light|easy-redis] [--start]"
+            echo "                            Create worktree (default env: easy)"
+            echo "                            -b           : create new branch; default base is canonical openemr/openemr master (fetched fresh)"
+            echo "                            --base <ref> : (with -b) base on a specific ref. Two forms:"
+            echo "                                             <url>[#<ref>]  -> fetch from URL (e.g. https://github.com/openemr/openemr.git#rel-810)"
+            echo "                                             <commit-ish>   -> standard git resolution (local branch, origin/master, tag, SHA, HEAD, ...)"
             echo "  remove <branch> [--keep-volumes] Remove worktree (volumes deleted by default)"
             echo "  up <branch>               Start Docker stack for worktree"
             echo "  down <branch> [--keep-volumes]  Stop Docker stack for worktree (volumes deleted by default)"
@@ -1505,8 +1606,12 @@ if [[ $# -eq 0 || "${FIRST_ARG}" = '--help' || "${FIRST_ARG}" = '-h' ]]; then
     echo "  -d                                 Specify the docker id or name to execute commands"
     echo 'Commands:'
     echo 'worktree-management:'
-    echo "  worktree add <branch> [-b] [--env easy|easy-light|easy-redis] [--start]"
-    echo "                                     Create worktree (-b creates new branch, default env: easy)"
+    echo "  worktree add <branch> [-b] [--base <ref>] [--env easy|easy-light|easy-redis] [--start]"
+    echo "                                     Create worktree (default env: easy)"
+    echo "                                     -b           : create new branch; default base is canonical openemr/openemr master (fetched fresh)"
+    echo "                                     --base <ref> : (with -b) base on a specific ref. Two forms:"
+    echo "                                                      <url>[#<ref>]  -> fetch from URL (e.g. https://github.com/openemr/openemr.git#rel-810)"
+    echo "                                                      <commit-ish>   -> standard git resolution (local branch, origin/master, tag, SHA, HEAD, ...)"
     echo "  worktree remove <branch> [--keep-volumes] Remove worktree (volumes deleted by default)"
     echo "  worktree up <branch>               Start Docker stack for a worktree"
     echo "  worktree down <branch> [--keep-volumes]  Stop Docker stack (volumes deleted by default)"
