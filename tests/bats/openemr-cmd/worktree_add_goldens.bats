@@ -49,20 +49,23 @@ run_add() {
         "${SCRIPT}" worktree add "$@"
 }
 
-# Mask runtime-variable absolute paths so the golden is reproducible across
-# machines/runs. The fixture's varying component is the mktemp suffix; the
-# prefix varies by platform:
+# Mask the runtime-variable TMP_PARENT prefix so the golden is reproducible
+# across machines/runs. Inside the masked prefix everything is stable
+# (TMP_ROOT = TMP_PARENT/primary, worktrees at TMP_PARENT/openemr-wt-*).
 #
-#   Linux:        /tmp/openemr-cmd-XXXXXX
-#   macOS:        /var/folders/<2ch>/<hash>/T/openemr-cmd-XXXXXX
-#   macOS (realpath-resolved): /private/var/folders/...
-#
-# Inside the masked prefix everything is stable (TMP_ROOT = TMP_PARENT/primary,
-# worktrees at TMP_PARENT/openemr-wt-*).
+# Takes TMP_PARENT as an argument rather than hardcoding the platform-specific
+# mktemp prefix (Linux /tmp vs. macOS /var/folders/.../T). Also substitutes
+# the realpath-resolved form: on macOS /var/folders/... resolves to
+# /private/var/folders/... because /var is itself a symlink, and the
+# override.yml has paths produced via realpath that leak the /private prefix.
+# On Linux the resolved form equals the original so the extra sed is a no-op.
 mask_paths() {
-    sed -E \
-        -e 's|/tmp/openemr-cmd-[A-Za-z0-9]+|__TMP_PARENT__|g' \
-        -e 's|(/private)?/var/folders/[^/]+/[^/]+/T/openemr-cmd-[A-Za-z0-9]+|__TMP_PARENT__|g'
+    local tmp_parent=$1
+    local tmp_parent_real
+    tmp_parent_real=$(realpath "${tmp_parent}" 2>/dev/null || echo "${tmp_parent}")
+    # Longer (resolved) form first so it can't be partially matched by the shorter one.
+    sed -e "s|${tmp_parent_real}|__TMP_PARENT__|g" \
+        -e "s|${tmp_parent}|__TMP_PARENT__|g"
 }
 
 # Compare ${actual_file} against the golden at ${golden_path}. If
@@ -71,7 +74,7 @@ mask_paths() {
 assert_matches_golden() {
     local actual_file=$1 golden_path=$2
     local actual_masked
-    actual_masked=$(mask_paths < "${actual_file}")
+    actual_masked=$(mask_paths "${TMP_PARENT}" < "${actual_file}")
     if [[ -n "${UPDATE_GOLDENS:-}" ]]; then
         mkdir -p "$(dirname "${golden_path}")"
         printf '%s\n' "${actual_masked}" > "${golden_path}"
