@@ -5,8 +5,7 @@ name: openemr-cmd e2e (real docker)
 # `openemr-cmd worktree add --start` against a real openemr/openemr
 # image. Two parallel jobs:
 #   - worktree-lifecycle-e2e: single-worktree happy path on env=easy,
-#     plus `worktree exec` end-to-end and the container-uid-on-remove
-#     contract (A5: failure-without-chown → success-with-chown).
+#     plus `worktree exec` end-to-end.
 #   - worktree-multi-concurrent-e2e: two worktrees on env=easy-light
 #     running side-by-side, distinct ports + compose projects, exec
 #     routes each to its own container (no cross-talk).
@@ -162,54 +161,18 @@ jobs:
         working-directory: openemr
         run: openemr-cmd worktree down test-e2e --keep-volumes
 
-      - name: "worktree remove WITHOUT chown (expected: fails on container-uid files)"
+      - name: worktree remove test-e2e
         working-directory: openemr
         run: |
-          # A5 contract test: the openemr container writes files into the
-          # worktree's bind-mount as root/apache uids during startup. Before
-          # any host-side chown back to the runner uid, `worktree remove`
-          # MUST fail — git's internal `rm -rf` (and our fallback) can't
-          # unlink files owned by other users. Pinning this failure mode
-          # documents the workaround as a tested expectation rather than a
-          # silent quirk; if the script ever learns to handle container-uid
-          # files automatically, this step will start succeeding and the
-          # next step's pre-chown becomes redundant.
-          set +e
-          echo y | openemr-cmd worktree remove test-e2e
-          rc=$?
-          set -e
-          if [[ "${rc}" = "0" ]]; then
-              echo "FAIL: remove unexpectedly succeeded without sudo chown"
-              echo "If the script now auto-handles container-uid files,"
-              echo "drop the next step's pre-chown and remove this step."
-              exit 1
-          fi
-          echo "as expected, remove failed (rc=${rc}) on container-owned files"
-          # State entry must still be present — wt_state_remove never ran.
-          if ! jq -e '."test-e2e"' .worktrees.json >/dev/null; then
-              echo "FAIL: state entry missing after failed remove (should still be there for retry)"
-              cat .worktrees.json
-              exit 1
-          fi
-          # Worktree dir must still be present (partially or fully).
-          if [[ ! -d "${{ github.workspace }}/openemr-wt-test-e2e" ]]; then
-              echo "FAIL: worktree dir gone after failed remove"
-              exit 1
-          fi
-          # State lockfile must NOT be lingering — the EXIT trap releases it
-          # on wt_die / rm failure under set -e.
-          if [[ -e "openemr/.worktrees.json.lock" ]]; then
-              echo "FAIL: state lockfile lingered after failed remove"
-              ls -la openemr/.worktrees.json.lock
-              exit 1
-          fi
-
-      - name: worktree remove test-e2e (with chown workaround)
-        working-directory: openemr
-        run: |
-          # Documented workaround: chown the worktree dir back to the runner
-          # uid before removal. The container-uid issue is the same one devs
-          # hit locally; CI is just the most reliable trigger.
+          # The openemr container writes files into the worktree's bind-mount
+          # volumes as a non-runner uid (apache, root, etc.). After the stack
+          # has run, those files exist on disk owned by uids the runner user
+          # can't touch — so `git worktree remove --force` (which does
+          # `rm -rf` under the hood) fails with Permission denied. Pre-chown
+          # the worktree dir so the removal can proceed.
+          # This is the same workaround devs hit when removing a worktree
+          # whose container wrote files as a non-host uid; CI is just the
+          # most reliable trigger for it.
           sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}/openemr-wt-test-e2e"
           # `remove` prompts; pipe 'y' to confirm.
           echo y | openemr-cmd worktree remove test-e2e
