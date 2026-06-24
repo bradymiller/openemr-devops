@@ -49,20 +49,14 @@ add_in_bg() {
 }
 
 @test "three concurrent adds (one per env): all succeed, distinct offsets, distinct compose subdirs" {
-    # KNOWN-BROKEN: wt_state_set does a non-atomic read-modify-write on
-    # .worktrees.json — two concurrent invocations both read the same
-    # starting state, each compute their independent mutation, then race
-    # on the final `mv`. The later `mv` wins; the earlier writer's state
-    # entry is silently lost. wt_next_offset has the same problem: two
-    # concurrent calls can both pick the same offset.
-    #
-    # Fix is being delivered in a follow-up PR that wraps the state
-    # mutators (cmd_worktree_add, _remove, _set_env) in a mkdir-based
-    # state lock. This test is the success criterion for that PR — when
-    # the race is closed, remove the `skip` and this test should pass
-    # reproducibly (it currently fails 5/5 locally).
-    skip "Known race in wt_state_set / wt_next_offset; tracked + un-skipped in race-fix PR"
-
+    # Race-closed by the state-lock work that introduced wt_acquire_state_lock /
+    # wt_release_state_lock in cmd_worktree_add. Before the lock landed, this
+    # test reproduced the bug 5/5: two concurrent invocations would both read
+    # the same starting state from wt_next_offset and wt_state_set, race on
+    # the final mv, and the later writer would silently clobber the earlier
+    # writer's entry (or both would land with the same offset → port
+    # collision). With the mkdir-based lock holding the wt_next_offset →
+    # wt_state_set critical section, this test is now the regression guard.
     local rc_a="${TMP_PARENT}/rc-a" rc_b="${TMP_PARENT}/rc-b" rc_c="${TMP_PARENT}/rc-c"
 
     add_in_bg conc-easy        easy        "${rc_a}"
