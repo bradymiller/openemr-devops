@@ -18,7 +18,7 @@ set -euo pipefail
 #################################################################################################
 
 # Increment the version when modify script
-VERSION="1.0.42"
+VERSION="1.0.43"
 
 # ============================================================================
 # WORKTREE STATE MANAGEMENT
@@ -147,6 +147,104 @@ else
     OE_REALPATH_E=(realpath)
     OE_REALPATH_M=(realpath)
 fi
+
+# ============================================================================
+# WORKTREE STATE LOCK
+# ============================================================================
+# .worktrees.json is mutated by wt_state_set / wt_state_remove via a
+# read-modify-write (jq -> tmp -> mv). Two concurrent openemr-cmd invocations
+# (e.g., two agents both running `worktree add`) both read the same starting
+# state, each compute their independent mutation, then race on the final mv.
+# The later mv wins — the earlier writer's entry is silently lost. The same
+# pattern in wt_next_offset can also produce duplicate offset allocations
+# (→ port collisions when stacks start).
+#
+# Fix: serialize the state-mutating critical sections of cmd_worktree_add /
+# _remove / _set_env behind a process-wide lock backed by an atomic
+# link(2) on a regular file. Crash-safety via EXIT trap; SIGKILL leaves
+# the lockfile orphaned and requires manual `rm -f` (documented in the
+# timeout error message).
+WT_STATE_LOCK_FILE="${WT_STATE_FILE}.lock"
+# Generous default — covers the longest realistic add (canonical fetch +
+# git worktree add + compose generation, typically ~5-30s).
+WT_STATE_LOCK_TIMEOUT_S="${WT_STATE_LOCK_TIMEOUT_S:-300}"
+
+# Acquire the state lock via atomic create-or-fail on a regular file.
+# Spin until create succeeds, time out after WT_STATE_LOCK_TIMEOUT_S to
+# avoid blocking behind a wedged peer.
+#
+# Lock primitive: `set -C` (noclobber) inside a subshell makes the
+# redirect `> ${WT_STATE_LOCK_FILE}` use `O_CREAT|O_EXCL` at the
+# syscall level — atomic create-or-fail. Only one of N concurrent
+# acquirers can win, and the winner's PID is in the lockfile from the
+# moment it appears (the subshell creates and writes before returning).
+#
+# NO auto-steal. Earlier iterations added stale-lock stealing for
+# crash recovery; every variant (mkdir+holder, atomic-mv, link(2)
+# + steal-verify) eventually surfaced a phantom-acquire race where
+# the steal+restore dance let two processes simultaneously believe
+# they held the lock and race on .worktrees.json. Steal-free locks
+# have no such window: every observer of the lockfile sees the SAME
+# holder PID, no replacements happen behind any holder's back.
+#
+# Trade-off: a SIGKILL'd holder leaves the lockfile orphaned. The
+# next acquirer hits the timeout (default 300s) and prints a clear
+# error including the lockfile path; the user removes it manually
+# with `rm -f`. For an admin CLI tool that's an acceptable cost in
+# exchange for correctness.
+#
+# Owner-aware release: a defensive identity check that the lockfile
+# still contains our PID before unlinking. With no steal there's no
+# scenario where a different PID could end up in our lockfile, but
+# the check costs nothing and guards against future regressions.
+wt_acquire_state_lock() {
+    if [[ "${WT_STATE_LOCK_HELD:-}" = "1" ]]; then return 0; fi
+    local lock_parent start_s now_s
+    lock_parent=$(dirname "${WT_STATE_LOCK_FILE}")
+    if [[ ! -d "${lock_parent}" || ! -w "${lock_parent}" ]]; then
+        wt_die "State-lock parent dir is missing or unwritable: '${lock_parent}'"
+    fi
+    start_s=$(date +%s)
+    while true; do
+        # Timeout check FIRST so any I/O failure (disk full, parent
+        # dir unwritable mid-loop, etc.) can't trap us in an unbounded
+        # spin even when every create attempt fails.
+        now_s=$(date +%s)
+        if (( now_s - start_s > WT_STATE_LOCK_TIMEOUT_S )); then
+            local current_holder
+            current_holder=$(cat "${WT_STATE_LOCK_FILE}" 2>/dev/null || true)
+            wt_die "Timed out waiting for state lock at '${WT_STATE_LOCK_FILE}' after ${WT_STATE_LOCK_TIMEOUT_S}s (held by PID ${current_holder:-unknown}). If that process is gone, remove the lock file manually: rm -f '${WT_STATE_LOCK_FILE}'"
+        fi
+        # Atomic create-with-content. `set -C` scoped to the subshell
+        # so the noclobber option doesn't leak; the redirect opens
+        # with O_CREAT|O_EXCL, fails (subshell exits non-zero) if the
+        # file exists. On success the subshell has also written $$
+        # before returning, so any observer of the lockfile sees the
+        # holder PID.
+        if ( set -C; echo $$ > "${WT_STATE_LOCK_FILE}" ) 2>/dev/null; then
+            break  # acquired
+        fi
+        sleep 0.1
+    done
+    WT_STATE_LOCK_HELD=1
+    # Crash-safety: release on script exit (wt_die, SIGTERM, normal exit).
+    # SIGKILL bypasses this — that's the case manual cleanup covers.
+    trap 'wt_release_state_lock' EXIT
+}
+
+wt_release_state_lock() {
+    if [[ "${WT_STATE_LOCK_HELD:-}" != "1" ]]; then return 0; fi
+    # Identity-checked release: only unlink if the lockfile still
+    # contains our PID. Defensive — with no steal there's no scenario
+    # where a different PID could end up there.
+    local holder_pid
+    holder_pid=$(cat "${WT_STATE_LOCK_FILE}" 2>/dev/null || true)
+    if [[ "${holder_pid}" = "$$" ]]; then
+        rm -f "${WT_STATE_LOCK_FILE}" 2>/dev/null || true
+    fi
+    WT_STATE_LOCK_HELD=0
+    trap - EXIT
+}
 
 wt_init_state() {
     [[ -f "${WT_STATE_FILE}" ]] || echo '{}' > "${WT_STATE_FILE}"
@@ -574,6 +672,13 @@ cmd_worktree_add() {
 
     wt_require_cmd git docker jq realpath
     wt_validate_env "${env}"
+
+    # Serialize the state-mutating critical section. Held from wt_init_state
+    # through wt_state_set so concurrent invocations can't collide on offset
+    # allocation or clobber each other's state entry. Released before any
+    # `--start` cmd_worktree_up call so a parallel add isn't blocked behind
+    # the docker compose up.
+    wt_acquire_state_lock
     wt_init_state
 
     local existing
@@ -652,6 +757,7 @@ cmd_worktree_add() {
     wt_copy_base_env "${OPENEMR_ROOT}" "${dir}"
 
     wt_state_set "${branch}" "${offset}" "${dir}" "${env}"
+    wt_release_state_lock
 
     echo ""
     echo "Worktree '${branch}' ready  [env: ${env}]"
@@ -687,6 +793,14 @@ cmd_worktree_remove() {
     done
     if [[ -z "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree remove <branch> [--keep-volumes]"; fi
 
+    # Hold the state lock for the entire critical section: wt_state_get,
+    # both wt_state_remove call sites (graceful-missing + destructive), and
+    # the wt_compose_cmd down. Same rationale as cmd_worktree_add. The
+    # interactive read -rp prompt is also held under the lock — a user
+    # taking a few seconds to confirm is preferable to a TOCTOU window
+    # where a concurrent op could mutate state between the prompt and the
+    # destructive ops.
+    wt_acquire_state_lock
     if ! [[ -f "${WT_STATE_FILE}" ]]; then wt_die "No worktrees found (state file missing)"; fi
     local dir
     dir=$(wt_state_get "${branch}" dir)
@@ -702,6 +816,7 @@ cmd_worktree_remove() {
         slug=$(wt_slug "${branch}")
         wt_state_remove "${branch}"
         git -C "${OPENEMR_ROOT}" worktree prune 2>/dev/null || true
+        wt_release_state_lock
         wt_info "Worktree dir was already gone; cleaned up state entry for '${branch}'."
         wt_info "Note: docker resources (containers, volumes) for this stack may still exist."
         wt_info "  Clean them manually: docker compose -p openemr-${slug} down -v"
@@ -734,6 +849,7 @@ cmd_worktree_remove() {
     git -C "${OPENEMR_ROOT}" worktree prune
 
     wt_state_remove "${branch}"
+    wt_release_state_lock
     wt_info "Done. Worktree '${branch}' removed."
 }
 
@@ -939,9 +1055,15 @@ cmd_worktree_set_env() {
     if [[ -z "${branch}" || -z "${new_env}" ]]; then
         wt_die "Usage: openemr-cmd worktree set-env <branch> <easy|easy-light|easy-redis>"
     fi
-    if ! [[ -f "${WT_STATE_FILE}" ]]; then wt_die "No worktrees found"; fi
 
     wt_validate_env "${new_env}"
+
+    # Hold the state lock for the entire critical section. set-env reads
+    # state, checks stack status via compose ps, then writes state +
+    # compose files. A concurrent worktree add/remove on the same branch
+    # would corrupt this if not serialized.
+    wt_acquire_state_lock
+    if ! [[ -f "${WT_STATE_FILE}" ]]; then wt_die "No worktrees found"; fi
 
     local current_env dir offset
     current_env=$(wt_state_get "${branch}" env)
@@ -952,6 +1074,7 @@ cmd_worktree_set_env() {
     fi
 
     if [[ "${current_env}" == "${new_env}" ]]; then
+        wt_release_state_lock
         wt_info "Worktree '${branch}' is already on env '${new_env}'."
         return 0
     fi
@@ -990,6 +1113,7 @@ cmd_worktree_set_env() {
     wt_state_set      "${branch}" "${offset}" "${dir}" "${new_env}"
     wt_write_env      "${dir}" "${branch}" "${offset}" "${new_env}"
     wt_write_override "${dir}" "${branch}" "${offset}" "${new_env}"
+    wt_release_state_lock
 
     echo ""
     echo "Worktree '${branch}' switched to env '${new_env}'"

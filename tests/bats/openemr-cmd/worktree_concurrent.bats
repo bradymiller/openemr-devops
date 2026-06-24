@@ -34,35 +34,46 @@ teardown() {
 }
 
 # Spawn a single `worktree add` in the background. Captures exit code to
-# a per-branch file so the parent can sum them after `wait`.
+# a per-branch rc file and stderr+stdout to a per-branch log file. Uses
+# an EXIT trap so the rc is always written even if the subshell exits
+# early under `set -e` (bats inherits set -e into subshells, so a
+# non-zero openemr-cmd would otherwise terminate before a trailing
+# `echo $?` could run, leaving an empty rc file that the parent reads
+# as "no rc captured").
 add_in_bg() {
     local branch=$1 env=$2 rc_file=$3
+    local log_file="${rc_file}.log"
+    : > "${log_file}"
     (
+        trap "echo \$? > '${rc_file}'" EXIT
         env \
             PATH="${STUB_DIR}:${PATH}" \
             OPENEMR_ROOT="${TMP_ROOT}" \
             WORKTREE_PARENT="${TMP_PARENT}" \
             WT_CANONICAL_URL="file://${TMP_ROOT}" \
-            "${SCRIPT}" worktree add "${branch}" -b --env "${env}" >/dev/null 2>&1
-        echo $? > "${rc_file}"
+            "${SCRIPT}" worktree add "${branch}" -b --env "${env}" > "${log_file}" 2>&1
     ) &
 }
 
-@test "three concurrent adds (one per env): all succeed, distinct offsets, distinct compose subdirs" {
-    # KNOWN-BROKEN: wt_state_set does a non-atomic read-modify-write on
-    # .worktrees.json — two concurrent invocations both read the same
-    # starting state, each compute their independent mutation, then race
-    # on the final `mv`. The later `mv` wins; the earlier writer's state
-    # entry is silently lost. wt_next_offset has the same problem: two
-    # concurrent calls can both pick the same offset.
-    #
-    # Fix is being delivered in a follow-up PR that wraps the state
-    # mutators (cmd_worktree_add, _remove, _set_env) in a mkdir-based
-    # state lock. This test is the success criterion for that PR — when
-    # the race is closed, remove the `skip` and this test should pass
-    # reproducibly (it currently fails 5/5 locally).
-    skip "Known race in wt_state_set / wt_next_offset; tracked + un-skipped in race-fix PR"
+# Diagnostic dump on assertion failures — show what each background add did.
+dump_bg_logs() {
+    local rc_dir=$1
+    for log in "${rc_dir}"/rc-*.log; do
+        [[ -f "${log}" ]] || continue
+        echo "--- ${log} ---"
+        cat "${log}"
+    done
+}
 
+@test "three concurrent adds (one per env): all succeed, distinct offsets, distinct compose subdirs" {
+    # Race-closed by the state-lock work that introduced wt_acquire_state_lock /
+    # wt_release_state_lock in cmd_worktree_add. Before the lock landed, this
+    # test reproduced the bug 5/5: two concurrent invocations would both read
+    # the same starting state from wt_next_offset and wt_state_set, race on
+    # the final mv, and the later writer would silently clobber the earlier
+    # writer's entry (or both would land with the same offset → port
+    # collision). With the mkdir-based lock holding the wt_next_offset →
+    # wt_state_set critical section, this test is now the regression guard.
     local rc_a="${TMP_PARENT}/rc-a" rc_b="${TMP_PARENT}/rc-b" rc_c="${TMP_PARENT}/rc-c"
 
     add_in_bg conc-easy        easy        "${rc_a}"
@@ -71,9 +82,14 @@ add_in_bg() {
     wait
 
     # All three exited 0.
-    [[ "$(cat "${rc_a}")" = "0" ]] || fail "conc-easy add failed (rc=$(cat "${rc_a}"))"
-    [[ "$(cat "${rc_b}")" = "0" ]] || fail "conc-easy-light add failed (rc=$(cat "${rc_b}"))"
-    [[ "$(cat "${rc_c}")" = "0" ]] || fail "conc-easy-redis add failed (rc=$(cat "${rc_c}"))"
+    for label in a b c; do
+        local rc_var="rc_${label}"
+        local rc_path="${!rc_var}"
+        if [[ "$(cat "${rc_path}" 2>/dev/null)" != "0" ]]; then
+            dump_bg_logs "${TMP_PARENT}"
+            fail "concurrent add ${label} failed (rc=$(cat "${rc_path}" 2>/dev/null))"
+        fi
+    done
 
     # All three present in the state file.
     [[ "$(jq -r '."conc-easy".env'       "${TMP_ROOT}/.worktrees.json")" = "easy"       ]] || fail "conc-easy entry wrong/missing"
@@ -101,9 +117,14 @@ add_in_bg() {
     add_in_bg cs-easy-redis  easy-redis  "${rc_c}"
     wait
 
-    [[ "$(cat "${rc_a}")" = "0" ]]
-    [[ "$(cat "${rc_b}")" = "0" ]]
-    [[ "$(cat "${rc_c}")" = "0" ]]
+    for label in a b c; do
+        local rc_var="rc_${label}"
+        local rc_path="${!rc_var}"
+        if [[ "$(cat "${rc_path}" 2>/dev/null)" != "0" ]]; then
+            dump_bg_logs "${TMP_PARENT}"
+            fail "concurrent add ${label} failed (rc=$(cat "${rc_path}" 2>/dev/null))"
+        fi
+    done
 
     # Each .env file landed in the env-specific compose subdir AND nowhere
     # else. A regression that hardcoded the env subdir (or shared a single
