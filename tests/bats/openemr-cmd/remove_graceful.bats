@@ -130,6 +130,78 @@ setup_full_worktree() {
     assert_output "false"
 }
 
+# --- A5: permission probe ---------------------------------------------------
+# Before any destructive op, cmd_worktree_remove walks the dir for unwritable
+# subdirectories (the symptom of container-uid files in the bind mount). If
+# any are found it bails with a chown hint, ensuring nothing has been
+# destroyed yet — state entry, dir contents, lockfile all preserved for
+# retry.
+
+@test "remove: probe refuses early when a subdir is unwritable (container-uid simulation)" {
+    # Root ignores DAC permissions — chmod 0500 still leaves the dir
+    # writable for uid 0, so the probe sees nothing wrong and the test's
+    # premise breaks. Skip when running as root (e.g., some CI images or
+    # rootless container test envs).
+    [[ "$(id -u)" -ne 0 ]] || skip "test relies on DAC permissions; uid 0 bypasses them"
+    setup_full_worktree feature-rm-probe -b
+    # Mimic the container-uid case: a subdir inside the worktree we can no
+    # longer write to. chmod 0500 means r-x for owner — we can read+enter,
+    # but cannot unlink children. rm -rf would fail with EACCES here.
+    local sub="${TMP_WT_PARENT}/openemr-wt-feature-rm-probe/uneditable-by-host"
+    mkdir -p "${sub}"
+    : > "${sub}/sentinel"
+    chmod 0500 "${sub}"
+
+    # Reset the docker.log so we can assert NO compose down was issued.
+    : > "${STUB_DIR}/docker.log"
+
+    run bash -c "echo y | env \
+        PATH='${STUB_DIR}:${PATH}' \
+        OPENEMR_ROOT='${TMP_OPENEMR_ROOT}' \
+        WORKTREE_PARENT='${TMP_WT_PARENT}' \
+        '${SCRIPT}' worktree remove feature-rm-probe"
+
+    # Restore perms so teardown's rm -rf can clean up.
+    chmod 0700 "${sub}" 2>/dev/null || true
+
+    assert_failure
+    # Clear, actionable error mentioning the unwritable dir + chown hint.
+    assert_output --partial "is not writable by you"
+    assert_output --partial "sudo chown -R"
+    assert_output --partial "${sub}"
+    # Nothing destructive ran: no compose down, no rm of dir, state intact.
+    if grep -F -e " down " "${STUB_DIR}/docker.log" >/dev/null 2>&1; then
+        cat "${STUB_DIR}/docker.log"
+        fail "compose down ran despite the permission probe failing"
+    fi
+    [[ -d "${TMP_WT_PARENT}/openemr-wt-feature-rm-probe" ]] \
+        || fail "worktree dir was removed despite the permission probe failing"
+    [[ -f "${sub}/sentinel" ]] || fail "sentinel inside unwritable subdir was deleted"
+    run jq -r 'has("feature-rm-probe")' "${STATE_FILE}"
+    assert_output "true"
+    # Lockfile released by the EXIT trap on wt_die.
+    [[ ! -e "${STATE_FILE}.lock" ]] \
+        || fail "state lockfile lingering after probe-refused remove"
+}
+
+@test "remove: probe is a no-op when all dirs are writable (happy path still works)" {
+    # The probe walks the tree but finds nothing unwritable, so it should
+    # not interfere with a normal remove. setup_full_worktree creates a
+    # worktree with default-perm dirs, so this is essentially the same as
+    # the default-remove test above — kept as an explicit regression guard
+    # in case the probe ever starts false-positiving.
+    setup_full_worktree feature-rm-probe-noop -b
+    run bash -c "echo y | env \
+        PATH='${STUB_DIR}:${PATH}' \
+        OPENEMR_ROOT='${TMP_OPENEMR_ROOT}' \
+        WORKTREE_PARENT='${TMP_WT_PARENT}' \
+        '${SCRIPT}' worktree remove feature-rm-probe-noop"
+    assert_success
+    refute_output --partial "is not writable by you"
+    run jq -r 'has("feature-rm-probe-noop")' "${STATE_FILE}"
+    assert_output "false"
+}
+
 @test "remove: when state dir is outside WORKTREE_PARENT, validation refuses early (no destructive action)" {
     # Tamper with the state file so dir points OUTSIDE WORKTREE_PARENT.
     # wt_validate_dir (invoked inside wt_compose_cmd before any docker or

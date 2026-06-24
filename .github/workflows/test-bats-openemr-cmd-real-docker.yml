@@ -5,7 +5,9 @@ name: openemr-cmd e2e (real docker)
 # `openemr-cmd worktree add --start` against a real openemr/openemr
 # image. Two parallel jobs:
 #   - worktree-lifecycle-e2e: single-worktree happy path on env=easy,
-#     plus `worktree exec` end-to-end.
+#     plus `worktree exec` end-to-end and the A5 container-uid-on-
+#     remove probe contract (remove-without-chown bails cleanly with
+#     a chown hint, all state preserved; chown + retry succeeds).
 #   - worktree-multi-concurrent-e2e: two worktrees on env=easy-light
 #     running side-by-side, distinct ports + compose projects, exec
 #     routes each to its own container (no cross-talk).
@@ -161,18 +163,59 @@ jobs:
         working-directory: openemr
         run: openemr-cmd worktree down test-e2e --keep-volumes
 
-      - name: worktree remove test-e2e
+      - name: "worktree remove WITHOUT chown (expected: probe refuses, nothing destroyed)"
         working-directory: openemr
         run: |
-          # The openemr container writes files into the worktree's bind-mount
-          # volumes as a non-runner uid (apache, root, etc.). After the stack
-          # has run, those files exist on disk owned by uids the runner user
-          # can't touch — so `git worktree remove --force` (which does
-          # `rm -rf` under the hood) fails with Permission denied. Pre-chown
-          # the worktree dir so the removal can proceed.
-          # This is the same workaround devs hit when removing a worktree
-          # whose container wrote files as a non-host uid; CI is just the
-          # most reliable trigger for it.
+          # A5 contract: the openemr container writes files into the
+          # worktree's bind-mount as root/apache uids during startup. Before
+          # the permission-probe fix, the script would proceed past compose
+          # down --volumes + git worktree remove --force and only fail
+          # mid-rm — leaving partial state on disk. With the probe in place,
+          # remove must bail BEFORE any destructive op, with a clear chown
+          # hint and ALL state intact for retry.
+          set +e
+          echo y | openemr-cmd worktree remove test-e2e > /tmp/remove-out.txt 2>&1
+          rc=$?
+          set -e
+          cat /tmp/remove-out.txt
+          if [[ "${rc}" = "0" ]]; then
+              echo "FAIL: remove unexpectedly succeeded without sudo chown"
+              exit 1
+          fi
+          grep -q "is not writable by you" /tmp/remove-out.txt \
+              || { echo "FAIL: probe did not surface the writability hint"; exit 1; }
+          grep -q "sudo chown -R" /tmp/remove-out.txt \
+              || { echo "FAIL: probe did not surface the chown command"; exit 1; }
+          # Nothing destroyed: state entry preserved, dir preserved, volumes
+          # preserved (compose down --volumes never ran), lockfile released.
+          if ! jq -e '."test-e2e"' .worktrees.json >/dev/null; then
+              echo "FAIL: state entry missing after probe-refused remove"
+              cat .worktrees.json
+              exit 1
+          fi
+          if [[ ! -d "${{ github.workspace }}/openemr-wt-test-e2e" ]]; then
+              echo "FAIL: worktree dir gone after probe-refused remove"
+              exit 1
+          fi
+          if [[ -e ".worktrees.json.lock" ]]; then
+              echo "FAIL: state lockfile lingered after probe-refused remove"
+              ls -la .worktrees.json.lock
+              exit 1
+          fi
+          # Volumes still around (compose down --volumes did NOT run).
+          remaining=$(docker volume ls -q --filter "name=openemr-test-e2e_" | wc -l)
+          if [[ "${remaining}" = "0" ]]; then
+              echo "FAIL: volumes were purged despite probe refusing"
+              docker volume ls
+              exit 1
+          fi
+          echo "as expected: probe refused, ${remaining} volumes preserved, state intact"
+
+      - name: worktree remove test-e2e (with chown workaround)
+        working-directory: openemr
+        run: |
+          # Documented workaround: chown the worktree dir back to the runner
+          # uid so the probe + downstream destructive ops can succeed.
           sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}/openemr-wt-test-e2e"
           # `remove` prompts; pipe 'y' to confirm.
           echo y | openemr-cmd worktree remove test-e2e
