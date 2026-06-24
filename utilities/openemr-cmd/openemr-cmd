@@ -18,7 +18,7 @@ set -euo pipefail
 #################################################################################################
 
 # Increment the version when modify script
-VERSION="1.0.46"
+VERSION="1.0.47"
 
 # ============================================================================
 # WORKTREE STATE MANAGEMENT
@@ -1573,34 +1573,33 @@ restart_couchdb_docker(){
 }
 
 creat_a_backup_snapshot(){
-    local BACKUP_FILE="$1"
+    # Check arg count BEFORE `local FOO="$1"` so a no-arg invocation
+    # prints the usage hint instead of crashing under set -u with
+    # "unbound variable". Same fix as ensure_current_ver_with_upgrade_ver.
     local BACKUP_FILE_CODE=20
     if [[ $# != 1 ]]; then
         echo 'Please provide a snapshot name.'
         echo 'e.g. openemr-cmd [backup-snapshot|bs] example'
         exit "${BACKUP_FILE_CODE}"
-    else
-        # Use the devtools function
-        run_devtools_in_docker "${CONTAINER_ID}" backup "${BACKUP_FILE}"
     fi
+    local BACKUP_FILE="$1"
+    run_devtools_in_docker "${CONTAINER_ID}" backup "${BACKUP_FILE}"
 }
 
 restore_from_a_snapshot(){
-    local BACKUP_FILE="$1"
+    # See creat_a_backup_snapshot for the arg-check-before-local rationale.
     local BACKUP_FILE_CODE=21
     if [[ $# != 1 ]]; then
         echo 'Please provide a restore snapshot name.'
         echo 'e.g. openemr-cmd [restore-snapshot|rs] example'
         exit "${BACKUP_FILE_CODE}"
-    else
-        # Use the devtools function
-        run_devtools_in_docker "${CONTAINER_ID}" restore "${BACKUP_FILE}"
     fi
+    local BACKUP_FILE="$1"
+    run_devtools_in_docker "${CONTAINER_ID}" restore "${BACKUP_FILE}"
 }
 
 copy_capsule_from_docker_to_host(){
-    local BACKUP_FILE="$1"
-    local BACKUP_HOST_DIR="${2:-}" #optional parameter, default to empty
+    # See creat_a_backup_snapshot for the arg-check-before-local rationale.
     local BACKUP_FILE_CODE=19
     if (( $# != 1 && $# != 2 )); then
         echo 'Please provide the capsule name.'
@@ -1608,32 +1607,31 @@ copy_capsule_from_docker_to_host(){
         echo 'An optional setting is the path to save to. If nothing provided, then will save in current directory.'
         echo 'e.g. openemr-cmd [get-capsule|gc] example.tgz /path/to/save'
         exit "${BACKUP_FILE_CODE}"
+    fi
+    local BACKUP_FILE="$1"
+    local BACKUP_HOST_DIR="${2:-}" # optional, default empty
+    if [[ -z "${BACKUP_HOST_DIR}" ]]; then
+        docker cp "${CONTAINER_ID}:/snapshots/${BACKUP_FILE}" .
     else
-        if [[ -z "${BACKUP_HOST_DIR}" ]]; then
-            docker cp "${CONTAINER_ID}:/snapshots/${BACKUP_FILE}" .
-        else
-            docker cp "${CONTAINER_ID}:/snapshots/${BACKUP_FILE}" "${BACKUP_HOST_DIR}/"
-        fi
+        docker cp "${CONTAINER_ID}:/snapshots/${BACKUP_FILE}" "${BACKUP_HOST_DIR}/"
     fi
 }
 
 copy_capsule_from_host_to_docker(){
-    # Need a capsule parameter
-    local BACKUP_FILE="$1"
+    # See creat_a_backup_snapshot for the arg-check-before-local rationale.
     local CP_CAP_DIR_DKR_CODE=15
     local BACKUP_FILE_CODE=18
     if [[ $# != 1 ]]; then
         echo 'Please provide the capsule file name (including path if applicable).'
         echo 'e.g. openemr-cmd [put-capsule|pc] example.tgz'
         exit "${BACKUP_FILE_CODE}"
-    else
-        if ! ls "${BACKUP_FILE}" &>/dev/null; then
-            echo 'Please check whether the capsule file exists or not'
-            exit "${CP_CAP_DIR_DKR_CODE}"
-        else
-            docker cp "${BACKUP_FILE}" "${CONTAINER_ID}:/snapshots/"
-        fi
     fi
+    local BACKUP_FILE="$1"
+    if ! ls "${BACKUP_FILE}" &>/dev/null; then
+        echo 'Please check whether the capsule file exists or not'
+        exit "${CP_CAP_DIR_DKR_CODE}"
+    fi
+    docker cp "${BACKUP_FILE}" "${CONTAINER_ID}:/snapshots/"
 }
 
 ensure_current_ver_with_upgrade_ver(){
