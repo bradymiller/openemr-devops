@@ -115,9 +115,10 @@ oc_run() {
 
 @test "pc <existing-file>: 'docker cp <file> <id>:/snapshots/'" {
     # pc checks that the file exists before docker cp. Create a real
-    # file in the test's cwd so the existence check passes.
+    # file so the existence check passes. Use the full-path template form
+    # (portable across GNU + BSD mktemp; `-p <dir>` is GNU-only).
     local tmp_cap
-    tmp_cap=$(mktemp -p "${BATS_TMPDIR:-/tmp}" pc-cap.XXXXXX.tgz)
+    tmp_cap=$(mktemp "${BATS_TMPDIR:-/tmp}/pc-cap.XXXXXX.tgz")
     run oc_run pc "${tmp_cap}"
     rm -f "${tmp_cap}"
     assert_success

@@ -62,8 +62,13 @@ oc_run() {
     assert_output --partial "changing webroot to openemr"
     assert_output --partial "restarting openemr docker"
     # The 'openemr' direction strips the /openemr suffix from DocumentRoot.
-    grep -Eq 'DocumentRoot /var/www/localhost/htdocs[^/]' "${STUB_DIR}/docker.log" \
-        || { cat "${STUB_DIR}/docker.log"; fail "expected sed to set DocumentRoot WITHOUT /openemr suffix"; }
+    # Match the sed REPLACEMENT (between the second and third @-separators),
+    # not the search pattern — both cwb and cwo's sed commands share the
+    # same search pattern `htdocs.*@`, so anchoring there would let cwb
+    # falsely pass as cwo. The replacement differs: cwo ends in `htdocs@g`,
+    # cwb ends in `htdocs/openemr@g`.
+    grep -Fq "@DocumentRoot /var/www/localhost/htdocs@g" "${STUB_DIR}/docker.log" \
+        || { cat "${STUB_DIR}/docker.log"; fail "expected sed replacement '...htdocs@g' (no /openemr suffix)"; }
     grep -Fq "restart ${CONTAINER}" "${STUB_DIR}/docker.log" || fail "expected 'docker restart'"
 }
 
