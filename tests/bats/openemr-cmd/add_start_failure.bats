@@ -75,11 +75,16 @@ teardown() {
     [[ "$(jq -r 'has("start-fail")' "${STATE_FILE}")" = "true" ]] \
         || fail "state entry missing"
     # Dir present and is a real git worktree (registered).
+    # macOS /tmp is a symlink to /private/tmp, so `git worktree list` reports
+    # the canonical path even when we constructed wt_dir against /tmp/...;
+    # canonicalize both sides before comparing.
     local wt_dir="${TMP_PARENT}/openemr-wt-start-fail"
     [[ -d "${wt_dir}" ]] || fail "worktree dir missing"
+    local wt_dir_real
+    wt_dir_real=$(cd "${wt_dir}" && pwd -P)
     git -C "${TMP_ROOT}" worktree list --porcelain \
-        | grep -Fqx "worktree ${wt_dir}" \
-        || fail "worktree not registered with git"
+        | grep -Fqx "worktree ${wt_dir_real}" \
+        || { git -C "${TMP_ROOT}" worktree list --porcelain; fail "worktree not registered with git (looking for ${wt_dir_real})"; }
     # Compose files written.
     [[ -f "${wt_dir}/docker/development-easy/.env" ]] \
         || fail ".env missing after failed --start"
