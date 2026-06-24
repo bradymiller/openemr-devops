@@ -194,3 +194,36 @@ run_locked() {
     assert_success
     [[ ! -e "${LOCK_DIR}" ]]
 }
+
+@test "lock: wt_lock_mtime_s returns single-line numeric output (no stat-format-mismatch pollution)" {
+    # Regression test for the cross-platform stat bug: on Linux, an old
+    # `wt_lock_mtime_s` chained `stat -c %Y` || `stat -f %m`, which on
+    # GNU stat interpreted `-f` as filesystem-info mode. When the first
+    # stat failed (e.g., lockdir vanished mid-call under concurrent
+    # steal), the second stat printed a multi-line "File: ..." block to
+    # stdout, and that polluted text propagated into `(( ... ))` arithmetic
+    # causing bash to abort with "File: unbound variable". The fix is to
+    # pick the right flag once based on stat flavor and never fall
+    # through. This test pins:
+    #   (a) the function returns single-line output, and
+    #   (b) the missing-path case returns "0" — not multi-line stat help.
+    mkdir "${LOCK_DIR}"
+    run_locked '
+        out=$(wt_lock_mtime_s "'"${LOCK_DIR}"'")
+        lines=$(printf "%s" "$out" | wc -l)
+        echo "lines=${lines}"
+        echo "out=${out}"
+    '
+    assert_success
+    # `wc -l` counts newlines; a single-line value (mtime) has 0 newlines.
+    assert_output --partial "lines=0"
+    rmdir "${LOCK_DIR}"
+
+    # Missing-path case: must return "0", not multi-line stat output.
+    run_locked '
+        out=$(wt_lock_mtime_s "'"${TMP_ROOT}/definitely-not-here"'")
+        echo "[${out}]"
+    '
+    assert_success
+    assert_output "[0]"
+}

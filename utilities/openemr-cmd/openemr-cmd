@@ -172,15 +172,31 @@ WT_STATE_LOCK_DIR="${WT_STATE_FILE}.lock"
 WT_STATE_LOCK_STALE_S="${WT_STATE_LOCK_STALE_S:-120}"
 WT_STATE_LOCK_TIMEOUT_S="${WT_STATE_LOCK_TIMEOUT_S:-300}"
 
-# Portable mtime in seconds-since-epoch. GNU stat uses -c %Y; BSD/macOS
-# uses -f %m. Returns 0 if neither flavor works (caller will then treat
-# the lock as fresh and keep waiting until its timeout fires, rather than
-# stealing aggressively on a stat-detection failure).
+# Portable mtime in seconds-since-epoch. Detect stat flavor once at
+# script load so we don't accidentally cross flags between platforms:
+# GNU coreutils `-c %Y` (format string) vs. BSD/macOS `-f %m` (also
+# format string but a totally different flag-letter on each side).
+# Falling through `-c` to `-f` on Linux is unsafe — on GNU stat, `-f`
+# is the filesystem-info mode and `-f %m` is interpreted as the literal
+# path `%m`, which writes a stat error to STDERR and a `File: "..."`
+# block to STDOUT before exiting non-zero. The stdout would then be
+# captured by `$(wt_lock_mtime_s ...)` and propagate into a `(( ... ))`
+# arithmetic expression — bash treats the leading `File` token as an
+# unbound variable and aborts the whole script. (Surfaced under
+# concurrent acquire stress where the lockdir disappeared between
+# the failed mkdir and this stat call.)
+if stat --version >/dev/null 2>&1; then
+    OE_STAT_MTIME=(stat -c %Y)
+else
+    OE_STAT_MTIME=(stat -f %m)
+fi
 wt_lock_mtime_s() {
     local path=$1
-    stat -c %Y "${path}" 2>/dev/null \
-        || stat -f %m "${path}" 2>/dev/null \
-        || echo 0
+    # Single-stat invocation. If the path is gone (concurrent steal
+    # window), stat exits non-zero, stderr is suppressed, and the
+    # fallback `echo 0` runs — caller treats "0" as "no info; don't
+    # steal" and waits/times out normally.
+    "${OE_STAT_MTIME[@]}" "${path}" 2>/dev/null || echo 0
 }
 
 # Acquire the state lock, spinning until mkdir succeeds. Steal stale
