@@ -18,7 +18,7 @@ set -euo pipefail
 #################################################################################################
 
 # Increment the version when modify script
-VERSION="1.0.44"
+VERSION="1.0.45"
 
 # ============================================================================
 # WORKTREE STATE MANAGEMENT
@@ -833,6 +833,29 @@ cmd_worktree_remove() {
         wt_info "Note: docker resources (containers, volumes) for this stack may still exist."
         wt_info "  Clean them manually: docker compose -p openemr-${slug} down -v"
         return 0
+    fi
+
+    # Probe for permission issues BEFORE any destructive op. The openemr
+    # container writes files into the bind-mounted worktree as a non-host
+    # uid (root/apache), which makes subdirectories unwritable for the host
+    # user. If we proceed without catching that, we'd:
+    #   1. purge the compose volumes (wt_compose_cmd down --volumes),
+    #   2. let `git worktree remove --force` unregister the worktree, and
+    #   3. fail mid-rm with EACCES — leaving partial state on disk + a
+    #      state entry pointing at a no-longer-registered worktree, which
+    #      a chown+retry can't recover from (wt_validate_dir rejects the
+    #      now-orphan dir). Bail early with a clear chown hint instead.
+    # `find -type d ! -writable` checks access(2) for the current uid, so
+    # any directory we wouldn't be able to unlink children of is reported.
+    local unwritable
+    unwritable=$(find "${dir}" -type d ! -writable -print -quit 2>/dev/null || true)
+    if [[ -n "${unwritable}" ]]; then
+        # wt_die's exit triggers the wt_acquire_state_lock EXIT trap, which
+        # releases the lock — no manual release needed.
+        wt_die "Cannot remove worktree '${branch}': directory '${unwritable}' is not writable by you.
+This usually means the docker container wrote files into the worktree as a
+different uid (root/apache). Restore ownership and retry:
+    sudo chown -R \"\$(id -u):\$(id -g)\" '${dir}'"
     fi
 
     echo "This will remove worktree '${branch}' at ${dir}."
