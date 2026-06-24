@@ -130,8 +130,12 @@ oc_regen() {
 
     run oc_regen regen-a
     assert_success
-    # 'a' restored.
-    grep -q "STOMPED_A" "${env_a}" && fail "'a' was not regenerated"
+    # 'a' restored — assert file presence first so a missing-file scenario
+    # (grep returns non-zero for "no match" AND for "no file") can't false-pass.
+    [[ -f "${env_a}" ]] || fail "'a' .env file missing after regen"
+    if grep -q "STOMPED_A" "${env_a}"; then
+        fail "'a' was not regenerated (STOMPED_A still present)"
+    fi
     # 'b' still stomped (we didn't regen it).
     grep -q "STOMPED_B" "${env_b}" || fail "'b' was modified by regen of 'a'"
 }
