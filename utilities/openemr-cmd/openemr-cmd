@@ -845,10 +845,16 @@ cmd_worktree_remove() {
     #      state entry pointing at a no-longer-registered worktree, which
     #      a chown+retry can't recover from (wt_validate_dir rejects the
     #      now-orphan dir). Bail early with a clear chown hint instead.
-    # `find -type d ! -writable` checks access(2) for the current uid, so
-    # any directory we wouldn't be able to unlink children of is reported.
-    local unwritable
-    unwritable=$(find "${dir}" -type d ! -writable -print -quit 2>/dev/null || true)
+    # `[[ -w ${d} ]]` uses access(2) for the current uid; we walk every
+    # subdir because `rm` needs write+execute on each PARENT to unlink
+    # children. Not using `find -writable` (GNU-only — BSD/macOS lacks it).
+    local unwritable=""
+    while IFS= read -r -d '' d; do
+        if [[ ! -w "${d}" ]]; then
+            unwritable="${d}"
+            break
+        fi
+    done < <(find "${dir}" -type d -print0 2>/dev/null || true)
     if [[ -n "${unwritable}" ]]; then
         # wt_die's exit triggers the wt_acquire_state_lock EXIT trap, which
         # releases the lock — no manual release needed.
