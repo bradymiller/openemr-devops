@@ -2,7 +2,7 @@ name: openemr-cmd e2e (real docker)
 
 # Tier 2 of the openemr-cmd test coverage roadmap. Unlike the hermetic
 # bats suite (test-bats-openemr-cmd.yml), this workflow exercises
-# openemr-cmd against a real openemr/openemr image. Three parallel jobs:
+# openemr-cmd against a real openemr/openemr image. Four parallel jobs:
 #   - worktree-lifecycle-e2e: single-worktree happy path on env=easy,
 #     `worktree exec` end-to-end, the A5 container-uid-on-remove probe
 #     contract, the set-env-while-running refusal, and a down→up
@@ -15,13 +15,20 @@ name: openemr-cmd e2e (real docker)
 #     (no worktree). Confirms top-level lifecycle, container auto-
 #     detection, exec via auto-detected id, prek-in-container, and
 #     dl/dn admin commands against a real running stack.
+#   - functional-roundtrip-e2e: the data-flow contract between
+#     openemr-cmd and the in-container `/root/devtools` scripts —
+#     irp inserts patients, bs produces a real snapshot, gc+pc shuttle
+#     the capsule out and back in, rs restores data on a FRESH stack.
+#     Catches cross-repo contract drift (openemr-cmd's CLI assumes a
+#     particular /root/devtools interface; this job confirms the
+#     in-container scripts still match it end-to-end).
 #
-# Cost: ~10-20 min per job (image pull + container init + healthcheck
-# start_period: 3m). The jobs run in parallel on separate runners, so
-# wall time is bounded by the slowest of the three. Runs on every PR that
-# touches openemr-cmd or this workflow file — slower PR cycle is the
-# deliberate trade for catching regressions before merge rather than
-# after.
+# Cost: ~10-20 min per job for the first three; the functional
+# round-trip job is heavier (~30-40 min, two stack startups). All four
+# run in parallel on separate runners, so wall time is bounded by the
+# slowest. Runs on every PR that touches openemr-cmd or this workflow
+# file — slower PR cycle is the deliberate trade for catching
+# regressions before merge rather than after.
 
 on:
   push:
@@ -707,6 +714,269 @@ jobs:
           docker ps -a || true
           echo "===== docker volume ls ====="
           docker volume ls || true
+          echo "===== openemr container logs (last 500) ====="
+          docker logs development-easy-openemr-1 --tail 500 2>/dev/null || true
+          echo "===== mysql container logs (last 200) ====="
+          docker logs development-easy-mysql-1 --tail 200 2>/dev/null || true
+
+  functional-roundtrip-e2e:
+    # Tests the data-flow contract between openemr-cmd's CLI and the
+    # in-container /root/devtools scripts: import-random-patients,
+    # backup, restore, and the capsule copy commands. The script's
+    # internals are openemr core's concern (covered there in
+    # tests/bats/docker/release/); this job confirms that openemr-cmd's
+    # assumed interface still matches what /root/devtools provides.
+    #
+    # End-to-end shape (mirrors a real ops flow: load demo data,
+    # generate test patients, snapshot, restore on a clean machine):
+    #   stack-A: up → wait healthy → confirm patient count = 0
+    #          → drid (dev-reset-install-demodata) → wait healthy
+    #          → capture demo_count
+    #          → irp 3 → confirm count = demo_count + 3
+    #          → bs roundtrip-snap → verify /snapshots/roundtrip-snap exists
+    #          → gc roundtrip-snap /tmp/host → verify file on host
+    #          → down -v → CLEAN SLATE (volumes gone)
+    #   stack-B: up → wait healthy → confirm patient count = 0 (fresh DB)
+    #          → pc /tmp/host/roundtrip-snap → verify back in container
+    #          → rs roundtrip-snap → confirm count is BACK TO demo_count + 3
+    #          → down -v
+    #
+    # If openemr core ever changes the /root/devtools interface in a
+    # way that breaks openemr-cmd's assumptions (e.g. backup grows a
+    # mandatory --format flag, restore changes its arg order), this
+    # job fails — catching the regression before users hit it at
+    # restore-from-backup time, which is the worst possible time.
+    name: e2e — functional round-trip — irp + bs + gc + pc + rs
+    runs-on: ubuntu-22.04
+    # Two full healthy-waits + irp + bs + restore + db verification.
+    # Restart (stack-B) is from a clean slate, so as slow as first boot.
+    timeout-minutes: 50
+    steps:
+      - name: Checkout openemr-devops (for openemr-cmd)
+        uses: actions/checkout@v7
+        with:
+          path: openemr-devops
+          persist-credentials: false
+
+      - name: Install openemr-cmd to /usr/local/bin
+        run: |
+          sudo install -m 0755 openemr-devops/utilities/openemr-cmd/openemr-cmd /usr/local/bin/openemr-cmd
+          openemr-cmd --version || true
+
+      - name: Clone openemr/openemr (shallow)
+        uses: actions/checkout@v7
+        with:
+          repository: openemr/openemr
+          path: openemr
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Pre-flight (versions + disk)
+        run: |
+          docker --version
+          docker compose version
+          jq --version
+          df -h /
+
+      # ---- stack-A: bring up, insert patients, snapshot, capsule out ----
+
+      - name: stack-A — openemr-cmd up
+        working-directory: openemr/docker/development-easy
+        run: openemr-cmd up
+
+      - name: stack-A — wait healthy
+        run: |
+          cname="development-easy-openemr-1"
+          for i in $(seq 1 90); do
+            status=$(docker inspect --format='{{.State.Health.Status}}' "${cname}" 2>/dev/null || echo "missing")
+            echo "[A ${i}/90 @ $((i*10))s] status=${status}"
+            case "${status}" in
+              healthy) echo "stack-A healthy"; exit 0 ;;
+              unhealthy) echo "FAIL: unhealthy"; docker logs "${cname}" --tail 200; exit 1 ;;
+            esac
+            sleep 10
+          done
+          echo "FAIL: stack-A never healthy in ~15 min"
+          docker ps -a; docker logs "${cname}" --tail 500
+          exit 1
+
+      - name: stack-A — baseline patient_data count is 0 (fresh DB)
+        working-directory: openemr/docker/development-easy
+        run: |
+          # Use openemr-cmd e to run the mysql client INSIDE the openemr
+          # container (which has the mariadb client installed) against the
+          # mysql container at the docker-network alias 'mysql'. Credentials
+          # come from the easy compose file: MYSQL_USER=openemr / PASS=openemr.
+          # -sN: silent + skip headers → just the number.
+          count=$(openemr-cmd e "mysql -u openemr -popenemr -h mysql openemr -sN -e 'SELECT COUNT(*) FROM patient_data'" 2>&1 | tr -d '[:space:]')
+          echo "stack-A baseline patient_data count: '${count}'"
+          [[ "${count}" = "0" ]] || { echo "FAIL: expected baseline count 0, got '${count}'"; exit 1; }
+
+      - name: stack-A — drid (dev-reset-install-demodata)
+        working-directory: openemr/docker/development-easy
+        run: |
+          # drid runs /root/devtools dev-reset-install-demodata which wipes
+          # and reinstalls openemr WITH the demo data set. Mirrors the
+          # common ops flow: load demo data, then layer additional test
+          # data on top, snapshot the whole thing for later restoration.
+          # The handler also restarts the couchdb container post-install.
+          openemr-cmd drid
+
+      - name: stack-A — wait healthy after drid (couchdb was restarted)
+        run: |
+          # drid restarts the couchdb container; give the stack a moment
+          # to settle before re-querying. The openemr container itself
+          # is not restarted by drid, but a re-confirm is cheap insurance.
+          cname="development-easy-openemr-1"
+          for i in $(seq 1 30); do
+            status=$(docker inspect --format='{{.State.Health.Status}}' "${cname}" 2>/dev/null || echo "missing")
+            echo "[A-post-drid ${i}/30 @ $((i*5))s] status=${status}"
+            [[ "${status}" = "healthy" ]] && exit 0
+            sleep 5
+          done
+          echo "FAIL: openemr did not return to healthy within 2.5 min after drid"
+          docker ps -a
+          exit 1
+
+      - name: stack-A — capture demo_count after drid (real-life starting point)
+        working-directory: openemr/docker/development-easy
+        run: |
+          demo_count=$(openemr-cmd e "mysql -u openemr -popenemr -h mysql openemr -sN -e 'SELECT COUNT(*) FROM patient_data'" 2>&1 | tr -d '[:space:]')
+          echo "stack-A post-drid demo patient_data count: '${demo_count}'"
+          [[ -n "${demo_count}" ]] && [[ "${demo_count}" =~ ^[0-9]+$ ]] \
+              || { echo "FAIL: could not capture numeric demo_count; got '${demo_count}'"; exit 1; }
+          [[ "${demo_count}" -gt 0 ]] \
+              || { echo "FAIL: drid produced no demo patients (count=0)"; exit 1; }
+          # Pass demo_count through to subsequent steps via $GITHUB_ENV.
+          echo "DEMO_COUNT=${demo_count}" >> "${GITHUB_ENV}"
+          echo "EXPECTED_AFTER_IRP=$((demo_count + 3))" >> "${GITHUB_ENV}"
+
+      - name: stack-A — irp 3 (layer 3 random patients on top of demo data)
+        working-directory: openemr/docker/development-easy
+        run: |
+          # irp sets ENV_VAR=OPENEMR_ENABLE_CCDA_IMPORT=1 and dispatches
+          # /root/devtools import-random-patients 3. The devtools script
+          # is openemr core's; we just confirm it runs to success and
+          # actually persists patients on top of the demo set.
+          openemr-cmd irp 3
+
+      - name: stack-A — confirm patient_data count is demo_count + 3
+        working-directory: openemr/docker/development-easy
+        run: |
+          count=$(openemr-cmd e "mysql -u openemr -popenemr -h mysql openemr -sN -e 'SELECT COUNT(*) FROM patient_data'" 2>&1 | tr -d '[:space:]')
+          echo "stack-A post-irp patient_data count: '${count}' (expected ${EXPECTED_AFTER_IRP} = demo ${DEMO_COUNT} + 3)"
+          [[ "${count}" = "${EXPECTED_AFTER_IRP}" ]] \
+              || { echo "FAIL: expected ${EXPECTED_AFTER_IRP} patients after irp 3, got '${count}'"; exit 1; }
+
+      - name: stack-A — bs roundtrip-snap (create backup)
+        working-directory: openemr/docker/development-easy
+        run: openemr-cmd bs roundtrip-snap
+
+      - name: stack-A — verify /snapshots/roundtrip-snap exists in container
+        working-directory: openemr/docker/development-easy
+        run: |
+          # /root/devtools backup writes to /snapshots/<name>; the exact
+          # filename layout (e.g. .tgz suffix or directory tree) is
+          # openemr core's concern. We just check SOMETHING shows up
+          # under /snapshots that matches the name we passed.
+          out=$(openemr-cmd e "ls -la /snapshots/" 2>&1)
+          echo "${out}"
+          grep -q "roundtrip-snap" <<< "${out}" \
+              || { echo "FAIL: no entry named 'roundtrip-snap' in /snapshots/"; exit 1; }
+
+      - name: stack-A — gc roundtrip-snap → host /tmp
+        working-directory: openemr/docker/development-easy
+        run: |
+          mkdir -p /tmp/capsule-host
+          openemr-cmd gc roundtrip-snap /tmp/capsule-host
+          # File on host — again, name-match only (file vs dir is core's call).
+          ls -la /tmp/capsule-host/
+          ls /tmp/capsule-host/ | grep -q "roundtrip-snap" \
+              || { echo "FAIL: capsule not copied to host"; exit 1; }
+
+      - name: stack-A — down -v (clean slate)
+        working-directory: openemr/docker/development-easy
+        run: openemr-cmd down
+
+      # ---- stack-B: fresh up, copy capsule back in, restore, verify ----
+
+      - name: stack-B — fresh openemr-cmd up (new volumes, empty DB)
+        working-directory: openemr/docker/development-easy
+        run: openemr-cmd up
+
+      - name: stack-B — wait healthy
+        run: |
+          cname="development-easy-openemr-1"
+          for i in $(seq 1 90); do
+            status=$(docker inspect --format='{{.State.Health.Status}}' "${cname}" 2>/dev/null || echo "missing")
+            echo "[B ${i}/90 @ $((i*10))s] status=${status}"
+            case "${status}" in
+              healthy) echo "stack-B healthy"; exit 0 ;;
+              unhealthy) echo "FAIL: unhealthy"; docker logs "${cname}" --tail 200; exit 1 ;;
+            esac
+            sleep 10
+          done
+          echo "FAIL: stack-B never healthy in ~15 min"
+          docker ps -a; docker logs "${cname}" --tail 500
+          exit 1
+
+      - name: stack-B — confirm patient_data count is 0 (fresh DB, no leakage)
+        working-directory: openemr/docker/development-easy
+        run: |
+          count=$(openemr-cmd e "mysql -u openemr -popenemr -h mysql openemr -sN -e 'SELECT COUNT(*) FROM patient_data'" 2>&1 | tr -d '[:space:]')
+          echo "stack-B baseline patient_data count: '${count}'"
+          # If this is non-zero, the down -v didn't actually delete volumes
+          # (or named volumes survived) — either way it'd invalidate the
+          # restore test by leaving the 3 patients from stack-A in place.
+          [[ "${count}" = "0" ]] || { echo "FAIL: expected 0 patients on fresh stack-B, got '${count}'"; exit 1; }
+
+      - name: stack-B — pc /tmp/capsule-host/<file> (copy capsule back in)
+        working-directory: openemr/docker/development-easy
+        run: |
+          # gc may have produced a file OR a directory named roundtrip-snap.
+          # pc expects a file argument; if gc gave us a dir, tar it up first.
+          src=/tmp/capsule-host/roundtrip-snap
+          if [[ -d "${src}" ]]; then
+              tar czf "${src}.tgz" -C /tmp/capsule-host roundtrip-snap
+              src="${src}.tgz"
+          fi
+          openemr-cmd pc "${src}"
+          # Verify it landed in /snapshots/.
+          openemr-cmd e "ls -la /snapshots/" | grep -q "roundtrip-snap" \
+              || { echo "FAIL: capsule not copied back into container"; exit 1; }
+
+      - name: stack-B — rs roundtrip-snap (restore from capsule)
+        working-directory: openemr/docker/development-easy
+        run: openemr-cmd rs roundtrip-snap
+
+      - name: stack-B — confirm patient_data count is back to demo_count + 3 (restore worked)
+        working-directory: openemr/docker/development-easy
+        run: |
+          # The headline assertion: after rs, the demo patients (loaded in
+          # stack-A via drid) PLUS the 3 random patients (added via irp)
+          # are all back in stack-B's previously-empty DB. Proves the
+          # capsule really contained the data AND restore actually
+          # restored it — the full ops flow: demo + extra → backup →
+          # different machine → restore → same dataset.
+          count=$(openemr-cmd e "mysql -u openemr -popenemr -h mysql openemr -sN -e 'SELECT COUNT(*) FROM patient_data'" 2>&1 | tr -d '[:space:]')
+          echo "stack-B post-restore patient_data count: '${count}' (expected ${EXPECTED_AFTER_IRP} = demo ${DEMO_COUNT} + 3)"
+          [[ "${count}" = "${EXPECTED_AFTER_IRP}" ]] \
+              || { echo "FAIL: expected ${EXPECTED_AFTER_IRP} patients after restore, got '${count}'"; exit 1; }
+          echo "data-flow round-trip OK: drid + irp 3 → bs → gc → fresh stack → pc → rs → patient count preserved"
+
+      - name: stack-B — down -v (final cleanup)
+        working-directory: openemr/docker/development-easy
+        run: openemr-cmd down
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          echo "===== docker ps -a ====="
+          docker ps -a || true
+          echo "===== docker volume ls ====="
+          docker volume ls || true
+          echo "===== /tmp/capsule-host listing ====="
+          ls -la /tmp/capsule-host/ 2>/dev/null || true
           echo "===== openemr container logs (last 500) ====="
           docker logs development-easy-openemr-1 --tail 500 2>/dev/null || true
           echo "===== mysql container logs (last 200) ====="
