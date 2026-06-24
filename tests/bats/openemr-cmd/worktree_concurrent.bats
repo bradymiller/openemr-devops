@@ -140,3 +140,166 @@ dump_bg_logs() {
     [[ ! -f "${TMP_PARENT}/openemr-wt-cs-easy-light/docker/development-easy/.env"     ]] || fail "easy-light leaked into easy dir"
     [[ ! -f "${TMP_PARENT}/openemr-wt-cs-easy-redis/docker/development-easy/.env"     ]] || fail "easy-redis leaked into easy dir"
 }
+
+# --- same-branch concurrent state ops --------------------------------------
+# Same-branch concurrent operations (two removes, set-env vs remove, two
+# set-envs) each acquire the state lock. The expectation is serialization:
+# the first wins, the second sees the updated state (which may mean it
+# fails gracefully — "No worktree found" — or applies its mutation on top
+# of the first's). State must never end up corrupted.
+
+# Spawn `worktree remove --keep-volumes` in the background, auto-confirming
+# the interactive prompt with "y\n" on stdin.
+remove_in_bg() {
+    local branch=$1 rc_file=$2
+    local log_file="${rc_file}.log"
+    : > "${log_file}"
+    (
+        trap "echo \$? > '${rc_file}'" EXIT
+        printf 'y\n' | env \
+            PATH="${STUB_DIR}:${PATH}" \
+            OPENEMR_ROOT="${TMP_ROOT}" \
+            WORKTREE_PARENT="${TMP_PARENT}" \
+            WT_STATE_LOCK_TIMEOUT_S=30 \
+            "${SCRIPT}" worktree remove "${branch}" --keep-volumes > "${log_file}" 2>&1
+    ) &
+}
+
+# Spawn `worktree set-env <branch> <env>` in the background.
+set_env_in_bg() {
+    local branch=$1 env=$2 rc_file=$3
+    local log_file="${rc_file}.log"
+    : > "${log_file}"
+    (
+        trap "echo \$? > '${rc_file}'" EXIT
+        env \
+            PATH="${STUB_DIR}:${PATH}" \
+            OPENEMR_ROOT="${TMP_ROOT}" \
+            WORKTREE_PARENT="${TMP_PARENT}" \
+            WT_STATE_LOCK_TIMEOUT_S=30 \
+            "${SCRIPT}" worktree set-env "${branch}" "${env}" > "${log_file}" 2>&1
+    ) &
+}
+
+@test "two concurrent removes of the same branch: one wins, the other fails gracefully" {
+    # Add a worktree to remove.
+    env \
+        PATH="${STUB_DIR}:${PATH}" \
+        OPENEMR_ROOT="${TMP_ROOT}" \
+        WORKTREE_PARENT="${TMP_PARENT}" \
+        WT_CANONICAL_URL="file://${TMP_ROOT}" \
+        "${SCRIPT}" worktree add same-branch-rm -b --env easy >/dev/null 2>&1
+    [[ -d "${TMP_PARENT}/openemr-wt-same-branch-rm" ]] || fail "fixture worktree not created"
+    [[ "$(jq -r 'has("same-branch-rm")' "${TMP_ROOT}/.worktrees.json")" = "true" ]] \
+        || fail "fixture state entry not present"
+
+    local rc_a="${TMP_PARENT}/rc-rm-a" rc_b="${TMP_PARENT}/rc-rm-b"
+    remove_in_bg same-branch-rm "${rc_a}"
+    remove_in_bg same-branch-rm "${rc_b}"
+    wait
+
+    local rc_a_val rc_b_val
+    rc_a_val=$(cat "${rc_a}" 2>/dev/null)
+    rc_b_val=$(cat "${rc_b}" 2>/dev/null)
+    # Exactly one should have succeeded; the other should have failed with
+    # "No worktree found" (state entry was removed by the winner before the
+    # loser acquired the lock).
+    local zeros=0
+    [[ "${rc_a_val}" = "0" ]] && zeros=$((zeros + 1))
+    [[ "${rc_b_val}" = "0" ]] && zeros=$((zeros + 1))
+    if (( zeros != 1 )); then
+        echo "--- a log ---"; cat "${rc_a}.log"
+        echo "--- b log ---"; cat "${rc_b}.log"
+        fail "expected exactly 1 successful remove, got ${zeros} (rc_a=${rc_a_val} rc_b=${rc_b_val})"
+    fi
+    # The loser should mention "No worktree found".
+    if [[ "${rc_a_val}" != "0" ]]; then
+        grep -q "No worktree found for branch 'same-branch-rm'" "${rc_a}.log" \
+            || { cat "${rc_a}.log"; fail "loser-a did not report 'No worktree found'"; }
+    fi
+    if [[ "${rc_b_val}" != "0" ]]; then
+        grep -q "No worktree found for branch 'same-branch-rm'" "${rc_b}.log" \
+            || { cat "${rc_b}.log"; fail "loser-b did not report 'No worktree found'"; }
+    fi
+    # State entry must be gone.
+    [[ "$(jq -r 'has("same-branch-rm")' "${TMP_ROOT}/.worktrees.json")" = "false" ]] \
+        || fail "state entry still present after concurrent removes"
+    # Lockfile cleaned up.
+    [[ ! -e "${TMP_ROOT}/.worktrees.json.lock" ]] || fail "state lockfile lingering"
+}
+
+@test "two concurrent set-env on the same branch (different envs): both succeed, final env is one of them" {
+    # Add a worktree on easy. Both set-env racers will target a different env.
+    env \
+        PATH="${STUB_DIR}:${PATH}" \
+        OPENEMR_ROOT="${TMP_ROOT}" \
+        WORKTREE_PARENT="${TMP_PARENT}" \
+        WT_CANONICAL_URL="file://${TMP_ROOT}" \
+        "${SCRIPT}" worktree add same-branch-se -b --env easy >/dev/null 2>&1
+    [[ "$(jq -r '."same-branch-se".env' "${TMP_ROOT}/.worktrees.json")" = "easy" ]] \
+        || fail "fixture not on easy"
+
+    local rc_a="${TMP_PARENT}/rc-se-a" rc_b="${TMP_PARENT}/rc-se-b"
+    set_env_in_bg same-branch-se easy-light "${rc_a}"
+    set_env_in_bg same-branch-se easy-redis "${rc_b}"
+    wait
+
+    local rc_a_val rc_b_val
+    rc_a_val=$(cat "${rc_a}" 2>/dev/null)
+    rc_b_val=$(cat "${rc_b}" 2>/dev/null)
+    if [[ "${rc_a_val}" != "0" || "${rc_b_val}" != "0" ]]; then
+        echo "--- a log ---"; cat "${rc_a}.log"
+        echo "--- b log ---"; cat "${rc_b}.log"
+        fail "expected both set-env to succeed (rc_a=${rc_a_val} rc_b=${rc_b_val})"
+    fi
+    # Final env is one of the two — last writer wins, state is well-formed.
+    local final_env
+    final_env=$(jq -r '."same-branch-se".env' "${TMP_ROOT}/.worktrees.json")
+    [[ "${final_env}" = "easy-light" || "${final_env}" = "easy-redis" ]] \
+        || fail "final env '${final_env}' is not one of easy-light/easy-redis"
+    # State is parseable JSON (no torn write).
+    jq empty "${TMP_ROOT}/.worktrees.json" || fail "state file is corrupted JSON"
+    # Lockfile cleaned up.
+    [[ ! -e "${TMP_ROOT}/.worktrees.json.lock" ]] || fail "state lockfile lingering"
+}
+
+@test "set-env races with remove on the same branch: no corruption, never both succeed-and-leave-entry" {
+    # Add a worktree, then race a remove vs a set-env. One of three outcomes:
+    #   (1) set-env first, remove second → entry gone
+    #   (2) remove first, set-env second → set-env fails "No worktree found", entry gone
+    # Either way the final state has NO entry for the branch and the JSON is intact.
+    env \
+        PATH="${STUB_DIR}:${PATH}" \
+        OPENEMR_ROOT="${TMP_ROOT}" \
+        WORKTREE_PARENT="${TMP_PARENT}" \
+        WT_CANONICAL_URL="file://${TMP_ROOT}" \
+        "${SCRIPT}" worktree add same-branch-mix -b --env easy >/dev/null 2>&1
+
+    local rc_rm="${TMP_PARENT}/rc-mix-rm" rc_se="${TMP_PARENT}/rc-mix-se"
+    remove_in_bg same-branch-mix "${rc_rm}"
+    set_env_in_bg same-branch-mix easy-light "${rc_se}"
+    wait
+
+    # Remove must always succeed (it acquires the lock and proceeds whether
+    # set-env got it first or not).
+    local rc_rm_val rc_se_val
+    rc_rm_val=$(cat "${rc_rm}" 2>/dev/null)
+    rc_se_val=$(cat "${rc_se}" 2>/dev/null)
+    if [[ "${rc_rm_val}" != "0" ]]; then
+        echo "--- rm log ---"; cat "${rc_rm}.log"
+        echo "--- se log ---"; cat "${rc_se}.log"
+        fail "remove failed (rc=${rc_rm_val}); should always succeed in this race"
+    fi
+    # State entry must be gone regardless of ordering.
+    [[ "$(jq -r 'has("same-branch-mix")' "${TMP_ROOT}/.worktrees.json")" = "false" ]] \
+        || fail "state entry still present after remove"
+    # JSON well-formed.
+    jq empty "${TMP_ROOT}/.worktrees.json" || fail "state file is corrupted JSON"
+    # Lockfile cleaned up.
+    [[ ! -e "${TMP_ROOT}/.worktrees.json.lock" ]] || fail "state lockfile lingering"
+    # If set-env lost the race, it must have failed gracefully (not crashed).
+    if [[ "${rc_se_val}" != "0" ]]; then
+        grep -q "No worktree found for branch 'same-branch-mix'" "${rc_se}.log" \
+            || { cat "${rc_se}.log"; fail "set-env loser did not report 'No worktree found'"; }
+    fi
+}

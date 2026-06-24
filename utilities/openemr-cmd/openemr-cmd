@@ -18,7 +18,7 @@ set -euo pipefail
 #################################################################################################
 
 # Increment the version when modify script
-VERSION="1.0.43"
+VERSION="1.0.44"
 
 # ============================================================================
 # WORKTREE STATE MANAGEMENT
@@ -247,7 +247,12 @@ wt_release_state_lock() {
 }
 
 wt_init_state() {
-    [[ -f "${WT_STATE_FILE}" ]] || echo '{}' > "${WT_STATE_FILE}"
+    # Treat a missing OR zero-byte file as uninitialized. A 0-byte file makes
+    # jq produce empty output on the read-modify-write path, so wt_state_set
+    # would `mv` an empty tmp file over the state and silently lose the entry
+    # it just thought it wrote. Initializing to `{}` makes all subsequent jq
+    # calls produce well-formed output.
+    [[ -s "${WT_STATE_FILE}" ]] || echo '{}' > "${WT_STATE_FILE}"
 }
 
 wt_state_get() {
@@ -695,6 +700,13 @@ cmd_worktree_add() {
     local offset dir dir_slug
     offset=$(wt_next_offset)
     dir_slug=$(wt_slug "${branch}")
+    # wt_slug strips everything outside [a-zA-Z0-9_-]. A branch made entirely
+    # of stripped chars (e.g. '!!!') produces an empty slug, which would create
+    # a worktree dir 'openemr-wt-' and a docker project 'openemr-' — both
+    # ambiguous and unsafe for state lookup.
+    if [[ -z "${dir_slug}" ]]; then
+        wt_die "Branch name '${branch}' contains no slug-safe characters [a-zA-Z0-9_-]"
+    fi
     dir="${WORKTREE_PARENT}/openemr-wt-${dir_slug}"
 
     wt_info "Creating git worktree for '${branch}' at ${dir}"
@@ -1131,11 +1143,23 @@ cmd_worktree_prune() {
     done
 
     wt_require_cmd jq git realpath
+    # Acquire the state lock for non-dry-run prunes: we iterate state
+    # entries and call wt_state_remove on stale ones. Without the lock,
+    # a concurrent `add` between our read of state and our writes could
+    # have its just-added entry pruned away as "stale" (its dir might
+    # not yet exist on disk, or `wt_validate_dir_safe` could fail
+    # mid-creation). --dry-run reads only and stays unlocked.
+    if ! ${dry_run}; then
+        wt_acquire_state_lock
+    fi
     wt_init_state
 
     local state_content
     state_content=$(cat "${WT_STATE_FILE}")
     if [[ "${state_content}" == "{}" ]]; then
+        if ! ${dry_run}; then
+            wt_release_state_lock
+        fi
         echo "(no stale entries)"
         return 0
     fi
@@ -1167,6 +1191,10 @@ cmd_worktree_prune() {
     # the same branch.
     if ! ${dry_run} && [[ "${pruned}" -gt 0 ]]; then
         git -C "${OPENEMR_ROOT}" worktree prune 2>/dev/null || true
+    fi
+
+    if ! ${dry_run}; then
+        wt_release_state_lock
     fi
 
     if [[ "${pruned}" -eq 0 ]]; then
