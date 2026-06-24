@@ -138,6 +138,11 @@ setup_full_worktree() {
 # retry.
 
 @test "remove: probe refuses early when a subdir is unwritable (container-uid simulation)" {
+    # Root ignores DAC permissions — chmod 0500 still leaves the dir
+    # writable for uid 0, so the probe sees nothing wrong and the test's
+    # premise breaks. Skip when running as root (e.g., some CI images or
+    # rootless container test envs).
+    [[ "$(id -u)" -ne 0 ]] || skip "test relies on DAC permissions; uid 0 bypasses them"
     setup_full_worktree feature-rm-probe -b
     # Mimic the container-uid case: a subdir inside the worktree we can no
     # longer write to. chmod 0500 means r-x for owner — we can read+enter,
