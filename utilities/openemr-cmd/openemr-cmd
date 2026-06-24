@@ -224,7 +224,14 @@ wt_lock_mtime_s() {
 # lock → C acquires → B and C overlap).
 wt_acquire_state_lock() {
     if [[ "${WT_STATE_LOCK_HELD:-}" = "1" ]]; then return 0; fi
-    local start_s now_s lock_mtime lock_age_s holder_pid
+    local lock_parent start_s now_s lock_mtime lock_age_s holder_pid steal_tmp
+    lock_parent=$(dirname "${WT_STATE_LOCK_DIR}")
+    # Fail-fast on non-contention reasons (parent missing or unwritable)
+    # so the user sees the real error immediately instead of after a
+    # WT_STATE_LOCK_TIMEOUT_S-long hang.
+    if [[ ! -d "${lock_parent}" || ! -w "${lock_parent}" ]]; then
+        wt_die "State-lock parent dir is missing or unwritable: '${lock_parent}'"
+    fi
     start_s=$(date +%s)
     while ! mkdir "${WT_STATE_LOCK_DIR}" 2>/dev/null; do
         # Stale-lock check: age-based first, then liveness-verified
@@ -242,8 +249,51 @@ wt_acquire_state_lock() {
                     # either keep waiting or time out cleanly.
                     :
                 else
-                    wt_info "Stealing stale state lock (held ${lock_age_s}s, holder PID ${holder_pid:-unknown} not alive)" >&2
-                    rm -rf "${WT_STATE_LOCK_DIR}" 2>/dev/null || true
+                    # Atomic-move-then-re-verify steal.
+                    #
+                    # `mv` (rename(2)) on the same source is atomic; only one
+                    # racer can succeed. But between our age/holder read and
+                    # the mv, the lock could have been stolen+re-mkdir'd by
+                    # another acquirer who's now the legitimate holder. If
+                    # we naively rm -rf what we just mv'd, we'd destroy that
+                    # fresh lock and acquire on top — both processes would
+                    # then "hold" the lock.
+                    #
+                    # Re-verify after mv: the stolen dir must STILL satisfy
+                    # the steal criteria (mtime stale AND holder dead-or-
+                    # empty). If a fresh acquirer replaced it, the stolen
+                    # dir has fresh mtime, or an alive holder, or both —
+                    # all paths into "put back".
+                    local actual_pid actual_mtime actual_age now_recheck
+                    steal_tmp="${WT_STATE_LOCK_DIR}.steal.$$.${RANDOM}"
+                    if mv "${WT_STATE_LOCK_DIR}" "${steal_tmp}" 2>/dev/null; then
+                        actual_pid=$(cat "${steal_tmp}/holder" 2>/dev/null || true)
+                        actual_mtime=$(wt_lock_mtime_s "${steal_tmp}")
+                        now_recheck=$(date +%s)
+                        if [[ -n "${actual_mtime}" && "${actual_mtime}" != "0" ]]; then
+                            actual_age=$(( now_recheck - actual_mtime ))
+                        else
+                            actual_age=0
+                        fi
+                        local holder_alive=0
+                        if [[ -n "${actual_pid}" ]] && kill -0 "${actual_pid}" 2>/dev/null; then
+                            holder_alive=1
+                        fi
+                        if (( holder_alive == 0 )) && (( actual_age > WT_STATE_LOCK_STALE_S )); then
+                            # Still satisfies steal criteria — safe to discard.
+                            wt_info "Stealing stale state lock (held ${actual_age}s, holder PID ${actual_pid:-unknown} not alive)" >&2
+                            rm -rf "${steal_tmp}" 2>/dev/null || true
+                        else
+                            # Lock was replaced by a fresh acquirer (fresh
+                            # mtime) or has come back to life. Restore. If
+                            # the restore loses to a third party that
+                            # already mkdir'd a new lock, leak steal_tmp
+                            # (the third party's lock stays intact).
+                            if ! mv "${steal_tmp}" "${WT_STATE_LOCK_DIR}" 2>/dev/null; then
+                                rm -rf "${steal_tmp}" 2>/dev/null || true
+                            fi
+                        fi
+                    fi
                     continue
                 fi
             fi
@@ -255,7 +305,10 @@ wt_acquire_state_lock() {
         sleep 0.1
     done
     # We hold the lock — record our PID so release can verify ownership
-    # and steal can check liveness.
+    # and steal can check liveness. There IS a small window here between
+    # mkdir success and the holder write; the steal path's empty-holder
+    # discriminator treats "empty holder + fresh mtime" as mid-acquire
+    # (don't steal) and "empty holder + stale mtime" as legacy (steal).
     echo $$ > "${WT_STATE_LOCK_DIR}/holder"
     WT_STATE_LOCK_HELD=1
     # Crash-safety: release on any script exit (wt_die, SIGTERM, normal exit).

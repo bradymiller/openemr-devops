@@ -195,6 +195,99 @@ run_locked() {
     [[ ! -e "${LOCK_DIR}" ]]
 }
 
+@test "lock: acquire fails fast when the lockdir's parent is missing or unwritable" {
+    # Point the lock at a non-existent parent. The acquire loop should
+    # detect this BEFORE the WT_STATE_LOCK_TIMEOUT_S spin (default 300s)
+    # and surface the real error.
+    local nowhere="${TMP_ROOT}/does/not/exist/.worktrees.json.lock"
+    WT_STATE_LOCK_TIMEOUT_S=60 \
+        run env \
+            OPENEMR_ROOT="${TMP_ROOT}" \
+            WT_STATE_FILE="${TMP_STATE}" \
+            WT_STATE_LOCK_TIMEOUT_S=60 \
+            bash -c "
+                set -uo pipefail
+                eval \"\$(head -n ${OC_SCRIPT_FUNCS_END} '${SCRIPT}')\"
+                WT_STATE_FILE='${TMP_STATE}'
+                WT_STATE_LOCK_DIR='${nowhere}'
+                wt_acquire_state_lock 2>&1
+            "
+    assert_failure
+    assert_output --partial "State-lock parent dir is missing or unwritable"
+    refute_output --partial "Timed out waiting for state lock"
+}
+
+@test "lock: concurrent acquirers serialize state mutations (no lost RMW updates)" {
+    # Race CodeRabbit caught + the actual property to test for it:
+    # exclusivity. If two acquirers ever simultaneously believe they
+    # hold the lock, they'll perform overlapping read-modify-write
+    # cycles on shared state and lose updates.
+    #
+    # Set the test up to start with a stale-dead lockdir (forces every
+    # racer through the steal path); then have N racers each take the
+    # lock, read+increment a counter file (with a sleep inside to widen
+    # the RMW window), release. After all racers exit, the counter must
+    # equal N. If the lock is broken (two acquirers "hold" simultaneously),
+    # they read the same starting value and lose one or more increments.
+    mkdir "${LOCK_DIR}"
+    local dead_pid
+    dead_pid=$( ( exec sh -c 'exit 0' ) & echo $! )
+    wait "${dead_pid}" 2>/dev/null || true
+    if kill -0 "${dead_pid}" 2>/dev/null; then
+        skip "PID ${dead_pid} did not actually die — test environment quirk"
+    fi
+    echo "${dead_pid}" > "${LOCK_DIR}/holder"
+    touch -t 200001010000 "${LOCK_DIR}"
+
+    local counter="${TMP_ROOT}/counter"
+    echo 0 > "${counter}"
+    local out_a="${TMP_ROOT}/racer-a.out" out_b="${TMP_ROOT}/racer-b.out" out_c="${TMP_ROOT}/racer-c.out"
+
+    increment_under_lock() {
+        local out=$1
+        env \
+            OPENEMR_ROOT="${TMP_ROOT}" \
+            WT_STATE_FILE="${TMP_STATE}" \
+            WT_STATE_LOCK_STALE_S=60 \
+            WT_STATE_LOCK_TIMEOUT_S=10 \
+            bash -c "
+                set -uo pipefail
+                eval \"\$(head -n ${OC_SCRIPT_FUNCS_END} '${SCRIPT}')\"
+                WT_STATE_FILE='${TMP_STATE}'
+                WT_STATE_LOCK_DIR='${LOCK_DIR}'
+                if wt_acquire_state_lock 2>/dev/null; then
+                    # Read-modify-write with a deliberate sleep inside
+                    # the critical section so any concurrent acquirer
+                    # has time to fire its own read+write and clobber.
+                    v=\$(cat '${counter}')
+                    sleep 0.3
+                    v=\$((v + 1))
+                    echo \$v > '${counter}'
+                    echo \"\$\$ wrote=\$v\"
+                    wt_release_state_lock 2>/dev/null
+                else
+                    echo \"\$\$ acquire-failed\"
+                fi
+            " > "${out}" 2>&1
+    }
+
+    increment_under_lock "${out_a}" &
+    increment_under_lock "${out_b}" &
+    increment_under_lock "${out_c}" &
+    wait
+
+    local final
+    final=$(cat "${counter}")
+    [[ "${final}" = "3" ]] || {
+        echo "--- ${out_a} ---"; cat "${out_a}"
+        echo "--- ${out_b} ---"; cat "${out_b}"
+        echo "--- ${out_c} ---"; cat "${out_c}"
+        fail "lost RMW: expected counter=3, got ${final}"
+    }
+    # And the lockdir should be cleaned up after all racers exit.
+    [[ ! -e "${LOCK_DIR}" ]] || fail "lockdir lingering after race"
+}
+
 @test "lock: wt_lock_mtime_s returns single-line numeric output (no stat-format-mismatch pollution)" {
     # Regression test for the cross-platform stat bug: on Linux, an old
     # `wt_lock_mtime_s` chained `stat -c %Y` || `stat -f %m`, which on
@@ -210,7 +303,9 @@ run_locked() {
     mkdir "${LOCK_DIR}"
     run_locked '
         out=$(wt_lock_mtime_s "'"${LOCK_DIR}"'")
-        lines=$(printf "%s" "$out" | wc -l)
+        # BSD wc -l left-pads with spaces; GNU does not. tr -d strips
+        # both so the assertion below is portable.
+        lines=$(printf "%s" "$out" | wc -l | tr -d "[:space:]")
         echo "lines=${lines}"
         echo "out=${out}"
     '
