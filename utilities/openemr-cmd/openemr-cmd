@@ -169,32 +169,29 @@ WT_STATE_LOCK_FILE="${WT_STATE_FILE}.lock"
 # git worktree add + compose generation, typically ~5-30s).
 WT_STATE_LOCK_TIMEOUT_S="${WT_STATE_LOCK_TIMEOUT_S:-300}"
 
-# Acquire the state lock via atomic link(2) on a file. Spin until ln
-# succeeds, time out after WT_STATE_LOCK_TIMEOUT_S to avoid blocking
-# behind a wedged peer.
+# Acquire the state lock via atomic create-or-fail on a regular file.
+# Spin until create succeeds, time out after WT_STATE_LOCK_TIMEOUT_S to
+# avoid blocking behind a wedged peer.
 #
-# Lock primitive: a REGULAR FILE created via link(2).
+# Lock primitive: `set -C` (noclobber) inside a subshell makes the
+# redirect `> ${WT_STATE_LOCK_FILE}` use `O_CREAT|O_EXCL` at the
+# syscall level — atomic create-or-fail. Only one of N concurrent
+# acquirers can win, and the winner's PID is in the lockfile from the
+# moment it appears (the subshell creates and writes before returning).
 #
-# Write $$ to a unique staging file, then `ln staging lockfile`. ln is
-# atomic and fails with EEXIST if the target exists; only one of N
-# concurrent acquirers can win, and the winner's content (their PID)
-# is in the lockfile at the moment of creation.
+# NO auto-steal. Earlier iterations added stale-lock stealing for
+# crash recovery; every variant (mkdir+holder, atomic-mv, link(2)
+# + steal-verify) eventually surfaced a phantom-acquire race where
+# the steal+restore dance let two processes simultaneously believe
+# they held the lock and race on .worktrees.json. Steal-free locks
+# have no such window: every observer of the lockfile sees the SAME
+# holder PID, no replacements happen behind any holder's back.
 #
-# NO auto-steal. Earlier iterations of this lock added stale-lock
-# stealing for crash recovery (process SIGKILL'd before its EXIT trap
-# could remove the lockfile). Every variant we tried — mkdir+holder,
-# atomic-mv, link(2) — eventually surfaced a phantom-acquire race
-# where the steal+restore dance created windows in which two
-# processes could simultaneously believe they held the lock and race
-# on .worktrees.json. Steal-free locks have no such window: every
-# observer of the lockfile sees the SAME holder PID, every release
-# verifies identity, no replacements happen behind the holder's back.
-#
-# Trade-off: a process killed by SIGKILL between acquire and release
-# leaves the lockfile orphaned. The next acquirer hits the timeout
-# (default 300s) and prints a clear error pointing at the lockfile
-# path; the user removes it manually with `rm -f`. For an admin CLI
-# tool that's an acceptable cost in exchange for correctness.
+# Trade-off: a SIGKILL'd holder leaves the lockfile orphaned. The
+# next acquirer hits the timeout (default 300s) and prints a clear
+# error including the lockfile path; the user removes it manually
+# with `rm -f`. For an admin CLI tool that's an acceptable cost in
+# exchange for correctness.
 #
 # Owner-aware release: a defensive identity check that the lockfile
 # still contains our PID before unlinking. With no steal there's no
@@ -202,33 +199,31 @@ WT_STATE_LOCK_TIMEOUT_S="${WT_STATE_LOCK_TIMEOUT_S:-300}"
 # the check costs nothing and guards against future regressions.
 wt_acquire_state_lock() {
     if [[ "${WT_STATE_LOCK_HELD:-}" = "1" ]]; then return 0; fi
-    local lock_parent staging start_s now_s
+    local lock_parent start_s now_s
     lock_parent=$(dirname "${WT_STATE_LOCK_FILE}")
     if [[ ! -d "${lock_parent}" || ! -w "${lock_parent}" ]]; then
         wt_die "State-lock parent dir is missing or unwritable: '${lock_parent}'"
     fi
     start_s=$(date +%s)
     while true; do
-        # Timeout check FIRST so any I/O failure (staging write fails on
-        # disk-full, parent dir unwritable mid-loop, etc.) can't trap us
-        # in an unbounded spin — the staging `continue` path skips the
-        # ln + post-ln logic but never the timeout.
+        # Timeout check FIRST so any I/O failure (disk full, parent
+        # dir unwritable mid-loop, etc.) can't trap us in an unbounded
+        # spin even when every create attempt fails.
         now_s=$(date +%s)
         if (( now_s - start_s > WT_STATE_LOCK_TIMEOUT_S )); then
             local current_holder
             current_holder=$(cat "${WT_STATE_LOCK_FILE}" 2>/dev/null || true)
             wt_die "Timed out waiting for state lock at '${WT_STATE_LOCK_FILE}' after ${WT_STATE_LOCK_TIMEOUT_S}s (held by PID ${current_holder:-unknown}). If that process is gone, remove the lock file manually: rm -f '${WT_STATE_LOCK_FILE}'"
         fi
-        staging="${WT_STATE_LOCK_FILE}.staging.$$.${RANDOM}"
-        if ! echo $$ > "${staging}" 2>/dev/null; then
-            sleep 0.1
-            continue
-        fi
-        if ln "${staging}" "${WT_STATE_LOCK_FILE}" 2>/dev/null; then
-            rm -f "${staging}" 2>/dev/null || true
+        # Atomic create-with-content. `set -C` scoped to the subshell
+        # so the noclobber option doesn't leak; the redirect opens
+        # with O_CREAT|O_EXCL, fails (subshell exits non-zero) if the
+        # file exists. On success the subshell has also written $$
+        # before returning, so any observer of the lockfile sees the
+        # holder PID.
+        if ( set -C; echo $$ > "${WT_STATE_LOCK_FILE}" ) 2>/dev/null; then
             break  # acquired
         fi
-        rm -f "${staging}" 2>/dev/null || true
         sleep 0.1
     done
     WT_STATE_LOCK_HELD=1
