@@ -808,7 +808,7 @@ jobs:
           # mysql container at the docker-network alias 'mysql'. Credentials
           # come from the easy compose file: MYSQL_USER=openemr / PASS=openemr.
           # -sN: silent + skip headers → just the number.
-          count=$(openemr-cmd e "mysql -u openemr -popenemr -h mysql openemr -sN -e 'SELECT COUNT(*) FROM patient_data'" 2>&1 | tr -d '[:space:]')
+          count=$(openemr-cmd e "mysql -u openemr -popenemr -h mysql openemr -sN -e 'SELECT COUNT(*) FROM patient_data' 2>/dev/null" | tr -d '[:space:]')
           echo "stack-A baseline patient_data count: '${count}'"
           [[ "${count}" = "0" ]] || { echo "FAIL: expected baseline count 0, got '${count}'"; exit 1; }
 
@@ -841,7 +841,7 @@ jobs:
       - name: stack-A — capture demo_count after drid (real-life starting point)
         working-directory: openemr/docker/development-easy
         run: |
-          demo_count=$(openemr-cmd e "mysql -u openemr -popenemr -h mysql openemr -sN -e 'SELECT COUNT(*) FROM patient_data'" 2>&1 | tr -d '[:space:]')
+          demo_count=$(openemr-cmd e "mysql -u openemr -popenemr -h mysql openemr -sN -e 'SELECT COUNT(*) FROM patient_data' 2>/dev/null" | tr -d '[:space:]')
           echo "stack-A post-drid demo patient_data count: '${demo_count}'"
           [[ -n "${demo_count}" ]] && [[ "${demo_count}" =~ ^[0-9]+$ ]] \
               || { echo "FAIL: could not capture numeric demo_count; got '${demo_count}'"; exit 1; }
@@ -863,7 +863,7 @@ jobs:
       - name: stack-A — confirm patient_data count is demo_count + 3
         working-directory: openemr/docker/development-easy
         run: |
-          count=$(openemr-cmd e "mysql -u openemr -popenemr -h mysql openemr -sN -e 'SELECT COUNT(*) FROM patient_data'" 2>&1 | tr -d '[:space:]')
+          count=$(openemr-cmd e "mysql -u openemr -popenemr -h mysql openemr -sN -e 'SELECT COUNT(*) FROM patient_data' 2>/dev/null" | tr -d '[:space:]')
           echo "stack-A post-irp patient_data count: '${count}' (expected ${EXPECTED_AFTER_IRP} = demo ${DEMO_COUNT} + 3)"
           [[ "${count}" = "${EXPECTED_AFTER_IRP}" ]] \
               || { echo "FAIL: expected ${EXPECTED_AFTER_IRP} patients after irp 3, got '${count}'"; exit 1; }
@@ -923,7 +923,7 @@ jobs:
       - name: stack-B — confirm patient_data count is 0 (fresh DB, no leakage)
         working-directory: openemr/docker/development-easy
         run: |
-          count=$(openemr-cmd e "mysql -u openemr -popenemr -h mysql openemr -sN -e 'SELECT COUNT(*) FROM patient_data'" 2>&1 | tr -d '[:space:]')
+          count=$(openemr-cmd e "mysql -u openemr -popenemr -h mysql openemr -sN -e 'SELECT COUNT(*) FROM patient_data' 2>/dev/null" | tr -d '[:space:]')
           echo "stack-B baseline patient_data count: '${count}'"
           # If this is non-zero, the down -v didn't actually delete volumes
           # (or named volumes survived) — either way it'd invalidate the
@@ -958,7 +958,7 @@ jobs:
           # capsule really contained the data AND restore actually
           # restored it — the full ops flow: demo + extra → backup →
           # different machine → restore → same dataset.
-          count=$(openemr-cmd e "mysql -u openemr -popenemr -h mysql openemr -sN -e 'SELECT COUNT(*) FROM patient_data'" 2>&1 | tr -d '[:space:]')
+          count=$(openemr-cmd e "mysql -u openemr -popenemr -h mysql openemr -sN -e 'SELECT COUNT(*) FROM patient_data' 2>/dev/null" | tr -d '[:space:]')
           echo "stack-B post-restore patient_data count: '${count}' (expected ${EXPECTED_AFTER_IRP} = demo ${DEMO_COUNT} + 3)"
           [[ "${count}" = "${EXPECTED_AFTER_IRP}" ]] \
               || { echo "FAIL: expected ${EXPECTED_AFTER_IRP} patients after restore, got '${count}'"; exit 1; }
