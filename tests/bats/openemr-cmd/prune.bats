@@ -237,3 +237,15 @@ JSON
     assert_output "true"
     rm -f "${lockfile}"
 }
+
+@test "prune releases the lock on the empty-state fast path (no leaked lockfile)" {
+    # Empty state hits the '(no stale entries)' early return inside the
+    # locked section. The lock MUST be released before that return so a
+    # subsequent state op doesn't see a leaked lockfile (the trap-on-exit
+    # is a safety net, not the primary release).
+    echo '{}' > "${STATE_FILE}"
+    oc_run_prune
+    assert_success
+    assert_output --partial "(no stale entries)"
+    [[ ! -e "${STATE_FILE}.lock" ]] || fail "prune leaked the state lockfile on the empty-state path"
+}

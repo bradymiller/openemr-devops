@@ -1157,6 +1157,9 @@ cmd_worktree_prune() {
     local state_content
     state_content=$(cat "${WT_STATE_FILE}")
     if [[ "${state_content}" == "{}" ]]; then
+        if ! ${dry_run}; then
+            wt_release_state_lock
+        fi
         echo "(no stale entries)"
         return 0
     fi

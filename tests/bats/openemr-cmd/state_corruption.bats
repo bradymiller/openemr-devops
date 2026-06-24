@@ -105,6 +105,7 @@ oc_run_with_state() {
     local before
     before=$(cat "${STATE_FILE}")
     run oc_run_with_state worktree list
+    assert_failure
     [[ "$(cat "${STATE_FILE}")" = "${before}" ]] || fail "list rewrote corrupted state"
 }
 
