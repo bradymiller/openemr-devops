@@ -40,10 +40,9 @@ teardown() {
 @test "prek-install: pi (short form) writes pre-commit + commit-msg hooks in .git/hooks/" {
     pushd "${TMP_REPO}" >/dev/null
     run env PATH="${STUB_DIR}:${PATH}" "${SCRIPT}" pi
-    local rc=$?
     popd >/dev/null
-    [[ "${rc}" -eq 0 ]] || { echo "${output}"; fail "pi exited ${rc}"; }
-    [[ "$status" -eq 0 ]] || fail "expected success"
+    # `run` always returns 0; the real exit code is in $status.
+    assert_success
     [[ -f "${TMP_REPO}/.git/hooks/pre-commit" ]] || fail "pre-commit hook not written"
     [[ -f "${TMP_REPO}/.git/hooks/commit-msg" ]] || fail "commit-msg hook not written"
     # Hook contents reference openemr-cmd (the absolute path the install resolved).

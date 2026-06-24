@@ -73,8 +73,10 @@ teardown() {
     assert_success
     # The stub records the stripped 'compose <args>' invocation; run_docker_compose
     # invokes 'compose -f <FILE> stop' (the -f path is real and may be empty,
-    # making the log line "compose stop"). Match either shape.
-    grep -Eq '^compose( |\s.*\s)stop$' "${STUB_DIR}/docker.log" \
+    # making the log line "compose stop"). Match either shape with a portable
+    # whitespace class (\s is a GNU-grep extension; BSD/macOS grep treats it
+    # literally — use [[:space:]]).
+    grep -Eq '^compose( |[[:space:]].*[[:space:]])stop$' "${STUB_DIR}/docker.log" \
         || { cat "${STUB_DIR}/docker.log"; fail "expected 'compose ... stop' in stub log"; }
     # And we did NOT pass --volumes (stop is non-destructive).
     if grep -Eq 'compose.*stop.*--volumes' "${STUB_DIR}/docker.log"; then
@@ -86,7 +88,7 @@ teardown() {
 @test "openemr-cmd start: calls 'compose start' (resumes a stopped stack)" {
     run env PATH="${STUB_DIR}:${PATH}" "${SCRIPT}" start
     assert_success
-    grep -Eq '^compose( |\s.*\s)start$' "${STUB_DIR}/docker.log" \
+    grep -Eq '^compose( |[[:space:]].*[[:space:]])start$' "${STUB_DIR}/docker.log" \
         || { cat "${STUB_DIR}/docker.log"; fail "expected 'compose ... start' in stub log"; }
 }
 
