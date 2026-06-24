@@ -1,3 +1,7 @@
 .vscode
 .idea
 /.task/
+
+# bats helper libraries — fetched at test time (CI workflow clones them
+# fresh; locally they are cloned into tests/bats/test_helper/ on demand)
+/tests/bats/test_helper/

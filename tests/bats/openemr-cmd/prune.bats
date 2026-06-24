@@ -181,3 +181,59 @@ JSON
     assert_success
     assert_output "true"
 }
+
+# --- state-lock integration -------------------------------------------------
+# prune mutates state and must hold the state lock for the iterate+remove
+# critical section so a concurrent `add` between our state read and our
+# wt_state_remove can't have its in-flight entry pruned away as "stale"
+# (its dir might not yet exist on disk, failing wt_validate_dir_safe).
+# --dry-run is read-only and stays unlocked.
+
+@test "prune acquires the state lock (blocked while held externally; times out)" {
+    # Hold the lock externally by writing the lockfile manually.
+    local lockfile="${STATE_FILE}.lock"
+    echo 99999 > "${lockfile}"
+    cat > "${STATE_FILE}" <<JSON
+{
+  "feature/stale": {"offset": 1, "dir": "${TMP_WT_PARENT}/does-not-exist", "env": "easy"}
+}
+JSON
+    # Short timeout so the test is fast; assert the timeout error.
+    run env \
+        PATH="${STUB_DIR}:$PATH" \
+        OPENEMR_ROOT="${TMP_OPENEMR_ROOT}" \
+        WORKTREE_PARENT="${TMP_WT_PARENT}" \
+        WT_STATE_LOCK_TIMEOUT_S=1 \
+        "$SCRIPT" worktree prune
+    assert_failure
+    assert_output --partial "Timed out waiting for state lock"
+    # State unchanged — prune never got past the acquire.
+    run jq -r 'has("feature/stale")' "${STATE_FILE}"
+    assert_output "true"
+    rm -f "${lockfile}"
+}
+
+@test "prune --dry-run does NOT acquire the lock (runs even when lock is held)" {
+    # Read-only path; expected to bypass lock entirely.
+    local lockfile="${STATE_FILE}.lock"
+    echo 99999 > "${lockfile}"
+    cat > "${STATE_FILE}" <<JSON
+{
+  "feature/stale": {"offset": 1, "dir": "${TMP_WT_PARENT}/does-not-exist", "env": "easy"}
+}
+JSON
+    # Should complete WITHOUT timing out (very short timeout to prove it).
+    run env \
+        PATH="${STUB_DIR}:$PATH" \
+        OPENEMR_ROOT="${TMP_OPENEMR_ROOT}" \
+        WORKTREE_PARENT="${TMP_WT_PARENT}" \
+        WT_STATE_LOCK_TIMEOUT_S=1 \
+        "$SCRIPT" worktree prune --dry-run
+    assert_success
+    assert_output --partial "Would prune stale entry:"
+    refute_output --partial "Timed out"
+    # State unchanged (dry-run).
+    run jq -r 'has("feature/stale")' "${STATE_FILE}"
+    assert_output "true"
+    rm -f "${lockfile}"
+}
