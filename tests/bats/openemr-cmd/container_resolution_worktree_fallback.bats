@@ -84,11 +84,13 @@ teardown() {
     assert_output --partial "Note: Targeting worktree container"
     assert_output --partial "openemr-myworktree-openemr-1"
     assert_output --partial "Use -d to specify a different container"
-    # The devtool dispatch should have routed to wt-container-id.
-    grep -Fq "wt-container-id" "${STUB_DIR}/docker.log" \
-        || { cat "${STUB_DIR}/docker.log"; fail "expected exec into wt-container-id"; }
-    grep -Fq "/root/devtools phpstan" "${STUB_DIR}/docker.log" \
-        || fail "expected '/root/devtools phpstan' devtool"
+    # The devtool dispatch should have routed to wt-container-id. Grep
+    # for the EXEC line specifically — a plain "wt-container-id" match
+    # would also hit the `docker ps --filter id=wt-container-id` lookup
+    # the script does to fetch the container name for the user-facing
+    # note, which doesn't prove the dispatch reached exec.
+    grep -Eq 'exec .*wt-container-id.* /root/devtools phpstan' "${STUB_DIR}/docker.log" \
+        || { cat "${STUB_DIR}/docker.log"; fail "expected 'exec ... wt-container-id ... /root/devtools phpstan'"; }
 }
 
 @test "worktree-label fallback: -d <id> overrides the label-detected container" {
