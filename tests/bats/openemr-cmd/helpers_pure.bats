@@ -61,6 +61,45 @@ oc_run_in_funcs() {
     assert_output "feature-my-thing"
 }
 
+@test "wt_slug: empty input -> empty output (deterministic, not an error)" {
+    oc_run_in_funcs "wt_slug ''" "$SCRIPT" "${OC_SCRIPT_FUNCS_END}" "$TMP_ROOT"
+    assert_success
+    assert_output ""
+}
+
+@test "wt_slug: non-ASCII chars stripped, surrounding ASCII survives" {
+    oc_run_in_funcs "wt_slug 'résumé'" "$SCRIPT" "${OC_SCRIPT_FUNCS_END}" "$TMP_ROOT"
+    assert_success
+    # `tr -cd 'a-zA-Z0-9_-'` operates byte-by-byte; the 2-byte UTF-8
+    # sequences for é (0xc3 0xa9) get dropped, leaving the ASCII letters
+    # 'r', 's', 'u', 'm'. Result: "rsum" (NOT empty, NOT "résumé").
+    assert_output "rsum"
+}
+
+@test "wt_slug: non-ASCII alongside ASCII keeps only the ASCII alnum/_/-" {
+    oc_run_in_funcs "wt_slug 'foo-bär-baz'" "$SCRIPT" "${OC_SCRIPT_FUNCS_END}" "$TMP_ROOT"
+    assert_success
+    # The ä is dropped; foo and baz survive with dashes intact.
+    assert_output "foo-br-baz"
+}
+
+@test "wt_slug: leading dash is preserved (argv-injection concern documented, not blocked)" {
+    # tr -cd '[a-zA-Z0-9_-]' allows '-' anywhere including as the first char.
+    # This test pins the current behavior so anyone trying to harden it
+    # (e.g., refuse slugs starting with -) updates this test deliberately.
+    oc_run_in_funcs "wt_slug '-evil'" "$SCRIPT" "${OC_SCRIPT_FUNCS_END}" "$TMP_ROOT"
+    assert_success
+    assert_output "-evil"
+}
+
+@test "wt_slug: long input is passed through unchanged (no truncation)" {
+    local long
+    long="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    oc_run_in_funcs "wt_slug '${long}'" "$SCRIPT" "${OC_SCRIPT_FUNCS_END}" "$TMP_ROOT"
+    assert_success
+    assert_output "${long}"
+}
+
 # --- wt_compose_subdir -------------------------------------------------------
 
 @test "wt_compose_subdir: easy" {

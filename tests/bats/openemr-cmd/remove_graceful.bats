@@ -65,3 +65,97 @@ JSON
     assert_success
     assert_output "false"
 }
+
+# --- destructive happy path (default + --keep-volumes) ----------------------
+# The remove command's non-graceful path (dir-exists) does compose down with
+# or without --volumes, then `git worktree remove --force`, then
+# wt_state_remove. The fixture builds out a real registered worktree (via
+# oc_init_repo_with_fixtures + the add subcommand) so the destructive path
+# can run end-to-end against the stubbed docker.
+
+setup_full_worktree() {
+    # Replace the bare init from `setup()` with the fixture'd init so add
+    # has the docker/development-<env>/ dirs to work with.
+    rm -rf "${TMP_OPENEMR_ROOT}"
+    mkdir -p "${TMP_OPENEMR_ROOT}"
+    oc_init_repo_with_fixtures "${TMP_OPENEMR_ROOT}"
+    run env \
+        PATH="${STUB_DIR}:${PATH}" \
+        OPENEMR_ROOT="${TMP_OPENEMR_ROOT}" \
+        WORKTREE_PARENT="${TMP_WT_PARENT}" \
+        WT_CANONICAL_URL="file://${TMP_OPENEMR_ROOT}" \
+        "$SCRIPT" worktree add "$@"
+    assert_success
+    : > "${STUB_DIR}/docker.log"
+}
+
+@test "remove <branch> (default): confirms, runs 'compose ... down --volumes', removes worktree + state" {
+    setup_full_worktree feature-rm -b
+    # `remove` prompts; pipe 'y' to confirm.
+    run bash -c "echo y | env \
+        PATH='${STUB_DIR}:${PATH}' \
+        OPENEMR_ROOT='${TMP_OPENEMR_ROOT}' \
+        WORKTREE_PARENT='${TMP_WT_PARENT}' \
+        '${SCRIPT}' worktree remove feature-rm"
+    assert_success
+    # Compose down called with --volumes
+    grep -F -e "-p openemr-feature-rm" "${STUB_DIR}/docker.log" \
+        | grep -F -e "down --volumes" \
+        || { cat "${STUB_DIR}/docker.log"; fail "expected 'down --volumes' invocation"; }
+    # Worktree dir gone
+    [[ ! -d "${TMP_WT_PARENT}/openemr-wt-feature-rm" ]] \
+        || fail "worktree dir should be removed"
+    # State entry gone
+    run jq -r 'has("feature-rm")' "${STATE_FILE}"
+    assert_output "false"
+}
+
+@test "remove <branch> --keep-volumes: runs 'compose ... down' WITHOUT --volumes" {
+    setup_full_worktree feature-rm-keep -b
+    run bash -c "echo y | env \
+        PATH='${STUB_DIR}:${PATH}' \
+        OPENEMR_ROOT='${TMP_OPENEMR_ROOT}' \
+        WORKTREE_PARENT='${TMP_WT_PARENT}' \
+        '${SCRIPT}' worktree remove feature-rm-keep --keep-volumes"
+    assert_success
+    # The compose invocation for this remove is 'down' (no --volumes).
+    local line
+    line=$(grep -F -e "-p openemr-feature-rm-keep" "${STUB_DIR}/docker.log" | head -1)
+    [[ -n "${line}" ]] || { cat "${STUB_DIR}/docker.log"; fail "expected compose invocation not found"; }
+    [[ "${line}" == *" down" ]] || fail "expected trailing 'down'; saw: ${line}"
+    [[ "${line}" != *"--volumes"* ]] || fail "--keep-volumes should suppress --volumes; saw: ${line}"
+    # State entry still gone after a successful remove (state cleanup is
+    # independent of the keep-volumes flag).
+    run jq -r 'has("feature-rm-keep")' "${STATE_FILE}"
+    assert_output "false"
+}
+
+@test "remove: when state dir is outside WORKTREE_PARENT, validation refuses early (no destructive action)" {
+    # Tamper with the state file so dir points OUTSIDE WORKTREE_PARENT.
+    # wt_validate_dir (invoked inside wt_compose_cmd before any docker or
+    # git mutation) catches this case before `git worktree remove --force`
+    # or the rm-rf fallback can run. Asserting the SAFETY contract — no
+    # destructive action — even though wt_compose_cmd suppresses stderr,
+    # which is why we don't check for a specific error string here.
+    local outside="${TMP_WT_PARENT}/../outside-parent-${RANDOM}"
+    mkdir -p "${outside}"
+    : > "${outside}/sentinel"
+    cat > "${STATE_FILE}" <<JSON
+{
+  "feature/tamper": {"offset": 1, "dir": "${outside}", "env": "easy"}
+}
+JSON
+    run bash -c "echo y | env \
+        PATH='${STUB_DIR}:${PATH}' \
+        OPENEMR_ROOT='${TMP_OPENEMR_ROOT}' \
+        WORKTREE_PARENT='${TMP_WT_PARENT}' \
+        '${SCRIPT}' worktree remove feature/tamper"
+    assert_failure
+    # Critical safety invariants — nothing destructive happened:
+    [[ -d "${outside}" ]] || fail "out-of-parent target was deleted — guard failed"
+    [[ -f "${outside}/sentinel" ]] || fail "out-of-parent target's contents were deleted"
+    # State entry NOT removed (wt_state_remove never ran).
+    run jq -r 'has("feature/tamper")' "${STATE_FILE}"
+    assert_output "true"
+    rm -rf "${outside}"
+}

@@ -116,3 +116,87 @@ JSON
     # Regen footer present with count 1.
     assert_output --partial '(1 entries have missing compose files'
 }
+
+# --- running / stopped / none statuses --------------------------------------
+# These require a "valid" fixture: registered git worktree + compose files
+# present + wt_validate_dir_safe passing. The script then probes docker for
+# running/stopped state. The recording stub's DOCKER_PS_OUTPUT controls what
+# `docker compose ... ps ...` returns.
+#
+# Status decision in cmd_worktree_list:
+#   running -> ps --services --filter status=running output contains "openemr"
+#   stopped -> running output does NOT contain "openemr", but `ps -aq` is non-empty
+#   none    -> both probes return empty
+
+# Build a valid-looking worktree: registered + compose files present.
+make_valid_worktree() {
+    local branch=$1
+    local wt_dir
+    wt_dir=$(oc_add_registered_worktree "${TMP_OPENEMR_ROOT}" "${TMP_WT_PARENT}" "${branch}")
+    mkdir -p "${wt_dir}/docker/development-easy"
+    : > "${wt_dir}/docker/development-easy/.env"
+    : > "${wt_dir}/docker/development-easy/docker-compose.override.yml"
+    : > "${wt_dir}/docker/development-easy/docker-compose.yml"
+    echo "${wt_dir}"
+}
+
+oc_run_list_with_ps() {
+    local ps_out=$1
+    run env \
+        PATH="${STUB_DIR}:$PATH" \
+        OPENEMR_ROOT="${TMP_OPENEMR_ROOT}" \
+        WORKTREE_PARENT="${TMP_WT_PARENT}" \
+        DOCKER_PS_OUTPUT="${ps_out}" \
+        "$SCRIPT" worktree list
+}
+
+@test "list running entry: docker ps returns 'openemr' service, row shows 'running'" {
+    local wt
+    wt=$(make_valid_worktree "feature/running")
+    cat > "${STATE_FILE}" <<JSON
+{
+  "feature/running": {"offset": 1, "dir": "${wt}", "env": "easy"}
+}
+JSON
+    oc_run_list_with_ps "openemr"
+    assert_success
+    echo "$output" | grep -E '^feature/running[[:space:]]+easy[[:space:]]+1[[:space:]]+running[[:space:]]' \
+        || { echo "$output"; fail "expected 'feature/running ... running' row not found"; }
+    # No advisory footers — this is a clean running entry.
+    refute_output --partial 'stale state entries'
+    refute_output --partial 'missing compose files'
+}
+
+@test "list stopped entry: docker ps -aq non-empty + no running 'openemr' service, row shows 'stopped'" {
+    local wt
+    wt=$(make_valid_worktree "feature/stopped")
+    cat > "${STATE_FILE}" <<JSON
+{
+  "feature/stopped": {"offset": 1, "dir": "${wt}", "env": "easy"}
+}
+JSON
+    # DOCKER_PS_OUTPUT="abc123" — first call (ps --services --filter
+    # status=running) returns "abc123" which doesn't match grep -q openemr,
+    # so the script falls into the second probe (ps -aq). That returns
+    # "abc123" too which is non-empty → status='stopped'.
+    oc_run_list_with_ps "abc123"
+    assert_success
+    echo "$output" | grep -E '^feature/stopped[[:space:]]+easy[[:space:]]+1[[:space:]]+stopped[[:space:]]' \
+        || { echo "$output"; fail "expected 'feature/stopped ... stopped' row not found"; }
+}
+
+@test "list 'none' status: both ps probes return empty, row shows 'none'" {
+    local wt
+    wt=$(make_valid_worktree "feature/none")
+    cat > "${STATE_FILE}" <<JSON
+{
+  "feature/none": {"offset": 1, "dir": "${wt}", "env": "easy"}
+}
+JSON
+    # DOCKER_PS_OUTPUT unset/empty (default) → both probes return empty
+    # → status stays 'none' (the initial value before either if-branch fires).
+    oc_run_list_with_ps ""
+    assert_success
+    echo "$output" | grep -E '^feature/none[[:space:]]+easy[[:space:]]+1[[:space:]]+none[[:space:]]' \
+        || { echo "$output"; fail "expected 'feature/none ... none' row not found"; }
+}
