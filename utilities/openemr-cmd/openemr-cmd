@@ -184,35 +184,63 @@ wt_lock_mtime_s() {
 }
 
 # Acquire the state lock, spinning until mkdir succeeds. Steal stale
-# locks (held by a dead process). Time out after WT_STATE_LOCK_TIMEOUT_S
-# to avoid deadlocking an interactive caller behind a wedged peer.
-# Idempotent at the caller level: a second acquire from the same shell
-# process is a no-op (would block waiting on its own lock otherwise).
+# locks only when the original holder's PID is no longer a live process.
+# Time out after WT_STATE_LOCK_TIMEOUT_S to avoid deadlocking behind a
+# wedged peer. Idempotent at the caller level: a second acquire from
+# the same shell process is a no-op (would block waiting on its own
+# lock otherwise).
+#
+# Owner-aware lock protocol:
+#
+#   On acquire: write our PID to ${WT_STATE_LOCK_DIR}/holder.
+#   On release: only rmdir if the holder file STILL contains our PID
+#               — if we were stolen from while doing work, the new
+#               holder's PID will be in holder, and we must not delete
+#               their lock.
+#   On steal:   only steal if the holder process is actually dead
+#               (`kill -0 <pid>` returns non-zero). A slow-but-alive
+#               holder that has gone past the stale threshold is NOT
+#               stolen; the acquirer waits and eventually times out.
+#
+# This closes the second-order race where age-based-only steal +
+# blind-rmdir-release could let two concurrent processes both think
+# they hold the lock (slow A → B steals → A wakes up and rmdirs B's
+# lock → C acquires → B and C overlap).
 wt_acquire_state_lock() {
     if [[ "${WT_STATE_LOCK_HELD:-}" = "1" ]]; then return 0; fi
-    local start_s now_s lock_mtime lock_age_s
+    local start_s now_s lock_mtime lock_age_s holder_pid
     start_s=$(date +%s)
     while ! mkdir "${WT_STATE_LOCK_DIR}" 2>/dev/null; do
-        # Stale-lock check: if the lockdir is older than the stale
-        # threshold, the holder is presumed gone (crashed before its
-        # EXIT trap could rmdir). Steal and retry.
+        # Stale-lock check: age-based first, then liveness-verified
+        # before we actually steal. A lock can look "old" because its
+        # holder is doing legitimate slow work (multi-minute fetch,
+        # paused process); only PID-dead holders get reaped.
         lock_mtime=$(wt_lock_mtime_s "${WT_STATE_LOCK_DIR}")
         if [[ -n "${lock_mtime}" && "${lock_mtime}" != "0" ]]; then
             now_s=$(date +%s)
             lock_age_s=$(( now_s - lock_mtime ))
             if (( lock_age_s > WT_STATE_LOCK_STALE_S )); then
-                wt_info "Stealing stale state lock (held ${lock_age_s}s, > ${WT_STATE_LOCK_STALE_S}s threshold)" >&2
-                rmdir "${WT_STATE_LOCK_DIR}" 2>/dev/null || true
-                continue
+                holder_pid=$(cat "${WT_STATE_LOCK_DIR}/holder" 2>/dev/null || true)
+                if [[ -n "${holder_pid}" ]] && kill -0 "${holder_pid}" 2>/dev/null; then
+                    # Holder is still alive — don't steal. Caller will
+                    # either keep waiting or time out cleanly.
+                    :
+                else
+                    wt_info "Stealing stale state lock (held ${lock_age_s}s, holder PID ${holder_pid:-unknown} not alive)" >&2
+                    rm -rf "${WT_STATE_LOCK_DIR}" 2>/dev/null || true
+                    continue
+                fi
             fi
         fi
-        # Not stale; wait and retry, with overall timeout.
         now_s=$(date +%s)
         if (( now_s - start_s > WT_STATE_LOCK_TIMEOUT_S )); then
             wt_die "Timed out waiting for state lock at '${WT_STATE_LOCK_DIR}' after ${WT_STATE_LOCK_TIMEOUT_S}s. Another openemr-cmd may be hung; if not, remove the lock dir manually."
         fi
         sleep 0.1
     done
+    # We hold the lock — record our PID so release can verify ownership
+    # and steal can check liveness.
+    echo $$ > "${WT_STATE_LOCK_DIR}/holder"
     WT_STATE_LOCK_HELD=1
     # Crash-safety: release on any script exit (wt_die, SIGTERM, normal exit).
     # SIGKILL bypasses this — that's the case stale-lock-steal covers.
@@ -221,7 +249,15 @@ wt_acquire_state_lock() {
 
 wt_release_state_lock() {
     if [[ "${WT_STATE_LOCK_HELD:-}" != "1" ]]; then return 0; fi
-    rmdir "${WT_STATE_LOCK_DIR}" 2>/dev/null || true
+    # Identity-checked release: only rmdir if the holder file still
+    # contains our PID. If we were stolen from (the lockdir was rm'd
+    # and re-mkdir'd by another process while we were doing work), the
+    # holder file now has someone else's PID and we MUST NOT delete it.
+    local holder_pid
+    holder_pid=$(cat "${WT_STATE_LOCK_DIR}/holder" 2>/dev/null || true)
+    if [[ "${holder_pid}" = "$$" ]]; then
+        rm -rf "${WT_STATE_LOCK_DIR}" 2>/dev/null || true
+    fi
     WT_STATE_LOCK_HELD=0
     trap - EXIT
 }

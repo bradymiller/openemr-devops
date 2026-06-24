@@ -120,6 +120,73 @@ run_locked() {
     rmdir "${LOCK_DIR}"
 }
 
+@test "lock: an age-stale lock whose holder PID is STILL ALIVE is NOT stolen" {
+    # Owner-aware steal: even when the lock is older than the stale
+    # threshold, we must verify the holder PID is gone (kill -0 fails)
+    # before reaping. A slow-but-alive holder (e.g., midway through a
+    # multi-minute canonical fetch) deserves to keep its lock.
+    mkdir "${LOCK_DIR}"
+    # Use $$ — guaranteed-live PID (the bats process itself).
+    echo $$ > "${LOCK_DIR}/holder"
+    touch -t 200001010000 "${LOCK_DIR}"   # backdate to look "stale"
+    WT_STATE_LOCK_STALE_S=60 WT_STATE_LOCK_TIMEOUT_S=1 \
+        run_locked 'wt_acquire_state_lock' 2>&1
+    assert_failure
+    # Steal did NOT fire (holder is alive).
+    refute_output --partial "Stealing stale state lock"
+    # Acquirer timed out instead.
+    assert_output --partial "Timed out waiting for state lock"
+    # And critically: the lockdir + holder file are untouched.
+    [[ -d "${LOCK_DIR}" ]] || fail "lockdir was deleted despite live holder"
+    [[ "$(cat "${LOCK_DIR}/holder")" = "$$" ]] || fail "holder file was overwritten"
+    rm -rf "${LOCK_DIR}"
+}
+
+@test "lock: an age-stale lock whose holder PID IS DEAD is stolen" {
+    # Use a PID we know to be dead: spawn a quick subshell, capture
+    # its PID, wait for it to exit, then use that PID. The kernel may
+    # eventually recycle it, but for the test's lifetime it's reliably
+    # dead and the kill -0 check returns failure.
+    mkdir "${LOCK_DIR}"
+    local dead_pid
+    dead_pid=$( ( exec sh -c 'exit 0' ) & echo $! )
+    wait "${dead_pid}" 2>/dev/null || true
+    # If the PID is still alive somehow (very unlikely), skip rather
+    # than write a flaky assertion.
+    if kill -0 "${dead_pid}" 2>/dev/null; then
+        skip "PID ${dead_pid} did not actually die — test environment quirk"
+    fi
+    echo "${dead_pid}" > "${LOCK_DIR}/holder"
+    touch -t 200001010000 "${LOCK_DIR}"
+    WT_STATE_LOCK_STALE_S=60 WT_STATE_LOCK_TIMEOUT_S=5 \
+        run_locked '
+            wt_acquire_state_lock
+            wt_release_state_lock
+        '
+    assert_success
+    assert_output --partial "Stealing stale state lock"
+    [[ ! -e "${LOCK_DIR}" ]] || fail "lockdir should be gone after the steal+acquire+release cycle"
+}
+
+@test "lock: release is identity-checked — does NOT rmdir a different holder's lock" {
+    # Simulate the second-order race: process A acquired, was stolen
+    # from, and then tries to release. The release MUST notice that
+    # the holder file no longer has its PID and leave the lockdir
+    # alone (otherwise it would delete the new holder's lock and
+    # reopen the race).
+    #
+    # We fake the state by writing a holder PID different from $$
+    # into the lockdir, then setting WT_STATE_LOCK_HELD=1 so release
+    # thinks "we" hold it, and asserting release leaves the dir intact.
+    mkdir "${LOCK_DIR}"
+    echo 99999 > "${LOCK_DIR}/holder"   # pretend a different process holds it now
+    run_locked 'WT_STATE_LOCK_HELD=1; wt_release_state_lock'
+    assert_success
+    [[ -d "${LOCK_DIR}" ]] || fail "release deleted a lockdir whose holder PID was NOT ours"
+    [[ "$(cat "${LOCK_DIR}/holder")" = "99999" ]] || fail "release overwrote/cleared a different holder's marker"
+    rm -rf "${LOCK_DIR}"
+}
+
 # --- release is safe to call when not held ----------------------------------
 
 @test "lock: release without prior acquire is a no-op (WT_STATE_LOCK_HELD=0)" {
