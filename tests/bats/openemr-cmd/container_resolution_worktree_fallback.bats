@@ -31,11 +31,15 @@ oc_make_docker_label_fallback_stub() {
     d=$(oc_mktempdir)
     log="${d}/docker.log"
     : > "${log}"
-    cat > "${d}/docker" <<'STUB'
+    # Unquoted heredoc so ${log} expands at write time; escape \$@/\$*/\$1
+    # so they stay literal in the stub script. Avoids needing `sed -i` later
+    # (sed -i is non-portable: GNU accepts no extension arg, BSD/macOS
+    # requires one).
+    cat > "${d}/docker" <<STUB
 #!/bin/sh
-echo "$@" >> STUBLOG
-args="$*"
-case "${args}" in
+echo "\$@" >> "${log}"
+args="\$*"
+case "\${args}" in
     "compose")
         exit 0
         ;;
@@ -45,7 +49,7 @@ case "${args}" in
     *"--filter id=wt-container-id"*)
         printf 'openemr-myworktree-openemr-1\n'
         ;;
-    *"--filter name=openemr-8-5"*|*"--filter name=openemr[_\\-]1"*|*"--filter name=couchdb"*|*"--filter name=mysql"*)
+    *"--filter name=openemr-8-5"*|*"--filter name=openemr[_\\\\-]1"*|*"--filter name=couchdb"*|*"--filter name=mysql"*)
         # Empty (no match) — forces the label-fallback path to be exercised.
         ;;
     *)
@@ -54,8 +58,6 @@ case "${args}" in
 esac
 exit 0
 STUB
-    # Replace STUBLOG placeholder with the absolute log path.
-    sed -i "s|STUBLOG|${log}|g" "${d}/docker"
     chmod +x "${d}/docker"
     echo "${d}"
 }
