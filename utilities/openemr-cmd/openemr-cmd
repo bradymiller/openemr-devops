@@ -18,7 +18,7 @@ set -euo pipefail
 #################################################################################################
 
 # Increment the version when modify script
-VERSION="1.0.45"
+VERSION="1.0.46"
 
 # ============================================================================
 # WORKTREE STATE MANAGEMENT
@@ -1637,17 +1637,16 @@ copy_capsule_from_host_to_docker(){
 }
 
 ensure_current_ver_with_upgrade_ver(){
-    # Need a version parameter
-    local UPGRADE_FROM_VERSION="$1"
+    # Check arg count FIRST so a no-arg invocation prints the usage hint
+    # instead of crashing on `local FOO="$1"` under set -u ("unbound variable").
     local BACKUP_FILE_CODE=22
     if [[ $# != 1 ]]; then
         echo 'Please provide the OpenEMR version to upgrade database from.'
         echo 'e.g. openemr-cmd [ensure-version|ev] 5.0.2'
         exit "${BACKUP_FILE_CODE}"
-    else
-        # Use the devtools function
-        run_devtools_in_docker "${CONTAINER_ID}" upgrade "${UPGRADE_FROM_VERSION}"
     fi
+    local UPGRADE_FROM_VERSION="$1"
+    run_devtools_in_docker "${CONTAINER_ID}" upgrade "${UPGRADE_FROM_VERSION}"
 }
 
 change_db_character_set_and_collation(){
