@@ -209,6 +209,16 @@ wt_acquire_state_lock() {
     fi
     start_s=$(date +%s)
     while true; do
+        # Timeout check FIRST so any I/O failure (staging write fails on
+        # disk-full, parent dir unwritable mid-loop, etc.) can't trap us
+        # in an unbounded spin — the staging `continue` path skips the
+        # ln + post-ln logic but never the timeout.
+        now_s=$(date +%s)
+        if (( now_s - start_s > WT_STATE_LOCK_TIMEOUT_S )); then
+            local current_holder
+            current_holder=$(cat "${WT_STATE_LOCK_FILE}" 2>/dev/null || true)
+            wt_die "Timed out waiting for state lock at '${WT_STATE_LOCK_FILE}' after ${WT_STATE_LOCK_TIMEOUT_S}s (held by PID ${current_holder:-unknown}). If that process is gone, remove the lock file manually: rm -f '${WT_STATE_LOCK_FILE}'"
+        fi
         staging="${WT_STATE_LOCK_FILE}.staging.$$.${RANDOM}"
         if ! echo $$ > "${staging}" 2>/dev/null; then
             sleep 0.1
@@ -219,13 +229,6 @@ wt_acquire_state_lock() {
             break  # acquired
         fi
         rm -f "${staging}" 2>/dev/null || true
-
-        now_s=$(date +%s)
-        if (( now_s - start_s > WT_STATE_LOCK_TIMEOUT_S )); then
-            local current_holder
-            current_holder=$(cat "${WT_STATE_LOCK_FILE}" 2>/dev/null || true)
-            wt_die "Timed out waiting for state lock at '${WT_STATE_LOCK_FILE}' after ${WT_STATE_LOCK_TIMEOUT_S}s (held by PID ${current_holder:-unknown}). If that process is gone, remove the lock file manually: rm -f '${WT_STATE_LOCK_FILE}'"
-        fi
         sleep 0.1
     done
     WT_STATE_LOCK_HELD=1
