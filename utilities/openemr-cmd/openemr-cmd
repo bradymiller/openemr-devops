@@ -160,172 +160,89 @@ fi
 # (→ port collisions when stacks start).
 #
 # Fix: serialize the state-mutating critical sections of cmd_worktree_add /
-# _remove / _set_env behind a process-wide lock. The lock is a directory
-# (mkdir(2) is atomic on POSIX filesystems, so the dir creation IS the
-# acquire). Crash-safety via EXIT trap. Stale-lock steal when the holder
-# is gone (process killed by SIGKILL before its trap could fire).
-WT_STATE_LOCK_DIR="${WT_STATE_FILE}.lock"
-# Override-able for tests and edge cases. The defaults are tuned for the
-# longest realistic add (canonical fetch + git worktree add + compose
-# generation, ~5-30s in practice). 120s stale-threshold leaves headroom
-# without leaving a true hang indefinitely lock-held.
-WT_STATE_LOCK_STALE_S="${WT_STATE_LOCK_STALE_S:-120}"
+# _remove / _set_env behind a process-wide lock backed by an atomic
+# link(2) on a regular file. Crash-safety via EXIT trap; SIGKILL leaves
+# the lockfile orphaned and requires manual `rm -f` (documented in the
+# timeout error message).
+WT_STATE_LOCK_FILE="${WT_STATE_FILE}.lock"
+# Generous default — covers the longest realistic add (canonical fetch +
+# git worktree add + compose generation, typically ~5-30s).
 WT_STATE_LOCK_TIMEOUT_S="${WT_STATE_LOCK_TIMEOUT_S:-300}"
 
-# Portable mtime in seconds-since-epoch. Detect stat flavor once at
-# script load so we don't accidentally cross flags between platforms:
-# GNU coreutils `-c %Y` (format string) vs. BSD/macOS `-f %m` (also
-# format string but a totally different flag-letter on each side).
-# Falling through `-c` to `-f` on Linux is unsafe — on GNU stat, `-f`
-# is the filesystem-info mode and `-f %m` is interpreted as the literal
-# path `%m`, which writes a stat error to STDERR and a `File: "..."`
-# block to STDOUT before exiting non-zero. The stdout would then be
-# captured by `$(wt_lock_mtime_s ...)` and propagate into a `(( ... ))`
-# arithmetic expression — bash treats the leading `File` token as an
-# unbound variable and aborts the whole script. (Surfaced under
-# concurrent acquire stress where the lockdir disappeared between
-# the failed mkdir and this stat call.)
-if stat --version >/dev/null 2>&1; then
-    OE_STAT_MTIME=(stat -c %Y)
-else
-    OE_STAT_MTIME=(stat -f %m)
-fi
-wt_lock_mtime_s() {
-    local path=$1
-    # Single-stat invocation. If the path is gone (concurrent steal
-    # window), stat exits non-zero, stderr is suppressed, and the
-    # fallback `echo 0` runs — caller treats "0" as "no info; don't
-    # steal" and waits/times out normally.
-    "${OE_STAT_MTIME[@]}" "${path}" 2>/dev/null || echo 0
-}
-
-# Acquire the state lock, spinning until mkdir succeeds. Steal stale
-# locks only when the original holder's PID is no longer a live process.
-# Time out after WT_STATE_LOCK_TIMEOUT_S to avoid deadlocking behind a
-# wedged peer. Idempotent at the caller level: a second acquire from
-# the same shell process is a no-op (would block waiting on its own
-# lock otherwise).
+# Acquire the state lock via atomic link(2) on a file. Spin until ln
+# succeeds, time out after WT_STATE_LOCK_TIMEOUT_S to avoid blocking
+# behind a wedged peer.
 #
-# Owner-aware lock protocol:
+# Lock primitive: a REGULAR FILE created via link(2).
 #
-#   On acquire: write our PID to ${WT_STATE_LOCK_DIR}/holder.
-#   On release: only rmdir if the holder file STILL contains our PID
-#               — if we were stolen from while doing work, the new
-#               holder's PID will be in holder, and we must not delete
-#               their lock.
-#   On steal:   only steal if the holder process is actually dead
-#               (`kill -0 <pid>` returns non-zero). A slow-but-alive
-#               holder that has gone past the stale threshold is NOT
-#               stolen; the acquirer waits and eventually times out.
+# Write $$ to a unique staging file, then `ln staging lockfile`. ln is
+# atomic and fails with EEXIST if the target exists; only one of N
+# concurrent acquirers can win, and the winner's content (their PID)
+# is in the lockfile at the moment of creation.
 #
-# This closes the second-order race where age-based-only steal +
-# blind-rmdir-release could let two concurrent processes both think
-# they hold the lock (slow A → B steals → A wakes up and rmdirs B's
-# lock → C acquires → B and C overlap).
+# NO auto-steal. Earlier iterations of this lock added stale-lock
+# stealing for crash recovery (process SIGKILL'd before its EXIT trap
+# could remove the lockfile). Every variant we tried — mkdir+holder,
+# atomic-mv, link(2) — eventually surfaced a phantom-acquire race
+# where the steal+restore dance created windows in which two
+# processes could simultaneously believe they held the lock and race
+# on .worktrees.json. Steal-free locks have no such window: every
+# observer of the lockfile sees the SAME holder PID, every release
+# verifies identity, no replacements happen behind the holder's back.
+#
+# Trade-off: a process killed by SIGKILL between acquire and release
+# leaves the lockfile orphaned. The next acquirer hits the timeout
+# (default 300s) and prints a clear error pointing at the lockfile
+# path; the user removes it manually with `rm -f`. For an admin CLI
+# tool that's an acceptable cost in exchange for correctness.
+#
+# Owner-aware release: a defensive identity check that the lockfile
+# still contains our PID before unlinking. With no steal there's no
+# scenario where a different PID could end up in our lockfile, but
+# the check costs nothing and guards against future regressions.
 wt_acquire_state_lock() {
     if [[ "${WT_STATE_LOCK_HELD:-}" = "1" ]]; then return 0; fi
-    local lock_parent start_s now_s lock_mtime lock_age_s holder_pid steal_tmp
-    lock_parent=$(dirname "${WT_STATE_LOCK_DIR}")
-    # Fail-fast on non-contention reasons (parent missing or unwritable)
-    # so the user sees the real error immediately instead of after a
-    # WT_STATE_LOCK_TIMEOUT_S-long hang.
+    local lock_parent staging start_s now_s
+    lock_parent=$(dirname "${WT_STATE_LOCK_FILE}")
     if [[ ! -d "${lock_parent}" || ! -w "${lock_parent}" ]]; then
         wt_die "State-lock parent dir is missing or unwritable: '${lock_parent}'"
     fi
     start_s=$(date +%s)
-    while ! mkdir "${WT_STATE_LOCK_DIR}" 2>/dev/null; do
-        # Stale-lock check: age-based first, then liveness-verified
-        # before we actually steal. A lock can look "old" because its
-        # holder is doing legitimate slow work (multi-minute fetch,
-        # paused process); only PID-dead holders get reaped.
-        lock_mtime=$(wt_lock_mtime_s "${WT_STATE_LOCK_DIR}")
-        if [[ -n "${lock_mtime}" && "${lock_mtime}" != "0" ]]; then
-            now_s=$(date +%s)
-            lock_age_s=$(( now_s - lock_mtime ))
-            if (( lock_age_s > WT_STATE_LOCK_STALE_S )); then
-                holder_pid=$(cat "${WT_STATE_LOCK_DIR}/holder" 2>/dev/null || true)
-                if [[ -n "${holder_pid}" ]] && kill -0 "${holder_pid}" 2>/dev/null; then
-                    # Holder is still alive — don't steal. Caller will
-                    # either keep waiting or time out cleanly.
-                    :
-                else
-                    # Atomic-move-then-re-verify steal.
-                    #
-                    # `mv` (rename(2)) on the same source is atomic; only one
-                    # racer can succeed. But between our age/holder read and
-                    # the mv, the lock could have been stolen+re-mkdir'd by
-                    # another acquirer who's now the legitimate holder. If
-                    # we naively rm -rf what we just mv'd, we'd destroy that
-                    # fresh lock and acquire on top — both processes would
-                    # then "hold" the lock.
-                    #
-                    # Re-verify after mv: the stolen dir must STILL satisfy
-                    # the steal criteria (mtime stale AND holder dead-or-
-                    # empty). If a fresh acquirer replaced it, the stolen
-                    # dir has fresh mtime, or an alive holder, or both —
-                    # all paths into "put back".
-                    local actual_pid actual_mtime actual_age now_recheck
-                    steal_tmp="${WT_STATE_LOCK_DIR}.steal.$$.${RANDOM}"
-                    if mv "${WT_STATE_LOCK_DIR}" "${steal_tmp}" 2>/dev/null; then
-                        actual_pid=$(cat "${steal_tmp}/holder" 2>/dev/null || true)
-                        actual_mtime=$(wt_lock_mtime_s "${steal_tmp}")
-                        now_recheck=$(date +%s)
-                        if [[ -n "${actual_mtime}" && "${actual_mtime}" != "0" ]]; then
-                            actual_age=$(( now_recheck - actual_mtime ))
-                        else
-                            actual_age=0
-                        fi
-                        local holder_alive=0
-                        if [[ -n "${actual_pid}" ]] && kill -0 "${actual_pid}" 2>/dev/null; then
-                            holder_alive=1
-                        fi
-                        if (( holder_alive == 0 )) && (( actual_age > WT_STATE_LOCK_STALE_S )); then
-                            # Still satisfies steal criteria — safe to discard.
-                            wt_info "Stealing stale state lock (held ${actual_age}s, holder PID ${actual_pid:-unknown} not alive)" >&2
-                            rm -rf "${steal_tmp}" 2>/dev/null || true
-                        else
-                            # Lock was replaced by a fresh acquirer (fresh
-                            # mtime) or has come back to life. Restore. If
-                            # the restore loses to a third party that
-                            # already mkdir'd a new lock, leak steal_tmp
-                            # (the third party's lock stays intact).
-                            if ! mv "${steal_tmp}" "${WT_STATE_LOCK_DIR}" 2>/dev/null; then
-                                rm -rf "${steal_tmp}" 2>/dev/null || true
-                            fi
-                        fi
-                    fi
-                    continue
-                fi
-            fi
+    while true; do
+        staging="${WT_STATE_LOCK_FILE}.staging.$$.${RANDOM}"
+        if ! echo $$ > "${staging}" 2>/dev/null; then
+            sleep 0.1
+            continue
         fi
+        if ln "${staging}" "${WT_STATE_LOCK_FILE}" 2>/dev/null; then
+            rm -f "${staging}" 2>/dev/null || true
+            break  # acquired
+        fi
+        rm -f "${staging}" 2>/dev/null || true
+
         now_s=$(date +%s)
         if (( now_s - start_s > WT_STATE_LOCK_TIMEOUT_S )); then
-            wt_die "Timed out waiting for state lock at '${WT_STATE_LOCK_DIR}' after ${WT_STATE_LOCK_TIMEOUT_S}s. Another openemr-cmd may be hung; if not, remove the lock dir manually."
+            local current_holder
+            current_holder=$(cat "${WT_STATE_LOCK_FILE}" 2>/dev/null || true)
+            wt_die "Timed out waiting for state lock at '${WT_STATE_LOCK_FILE}' after ${WT_STATE_LOCK_TIMEOUT_S}s (held by PID ${current_holder:-unknown}). If that process is gone, remove the lock file manually: rm -f '${WT_STATE_LOCK_FILE}'"
         fi
         sleep 0.1
     done
-    # We hold the lock — record our PID so release can verify ownership
-    # and steal can check liveness. There IS a small window here between
-    # mkdir success and the holder write; the steal path's empty-holder
-    # discriminator treats "empty holder + fresh mtime" as mid-acquire
-    # (don't steal) and "empty holder + stale mtime" as legacy (steal).
-    echo $$ > "${WT_STATE_LOCK_DIR}/holder"
     WT_STATE_LOCK_HELD=1
-    # Crash-safety: release on any script exit (wt_die, SIGTERM, normal exit).
-    # SIGKILL bypasses this — that's the case stale-lock-steal covers.
+    # Crash-safety: release on script exit (wt_die, SIGTERM, normal exit).
+    # SIGKILL bypasses this — that's the case manual cleanup covers.
     trap 'wt_release_state_lock' EXIT
 }
 
 wt_release_state_lock() {
     if [[ "${WT_STATE_LOCK_HELD:-}" != "1" ]]; then return 0; fi
-    # Identity-checked release: only rmdir if the holder file still
-    # contains our PID. If we were stolen from (the lockdir was rm'd
-    # and re-mkdir'd by another process while we were doing work), the
-    # holder file now has someone else's PID and we MUST NOT delete it.
+    # Identity-checked release: only unlink if the lockfile still
+    # contains our PID. Defensive — with no steal there's no scenario
+    # where a different PID could end up there.
     local holder_pid
-    holder_pid=$(cat "${WT_STATE_LOCK_DIR}/holder" 2>/dev/null || true)
+    holder_pid=$(cat "${WT_STATE_LOCK_FILE}" 2>/dev/null || true)
     if [[ "${holder_pid}" = "$$" ]]; then
-        rm -rf "${WT_STATE_LOCK_DIR}" 2>/dev/null || true
+        rm -f "${WT_STATE_LOCK_FILE}" 2>/dev/null || true
     fi
     WT_STATE_LOCK_HELD=0
     trap - EXIT
