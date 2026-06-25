@@ -654,12 +654,44 @@ jobs:
               fi
           done
 
-      - name: Down + remove all three worktrees (auto-chown handles it; stacks still up)
+      - name: Pre-remove host-side chown (covers volume-shadowed mount-point dirs)
+        run: |
+          # #833's auto-chown via `docker exec` chowns files INSIDE the
+          # bind mount, but it cannot reach the host-side dirs that
+          # docker created as root when first mounting named volumes
+          # OVER bind-mount paths (ccdaservice/node_modules,
+          # ccdaservice/packages/oe-cqm-service/node_modules — both
+          # volumes shadow worktree dirs). Those dirs persist on the
+          # host owned by root; when `git worktree remove --force`
+          # runs, the writability probe correctly catches them and
+          # refuses to proceed.
+          #
+          # Fix: pre-emptively sudo chown each worktree dir before
+          # remove. This handles both the volume-shadow case AND any
+          # apache-uid-owned bind-mount files (the latter is what
+          # auto-chown also handles; the two paths are complementary
+          # but harmless overlap). The lifecycle job sidesteps this
+          # by sudo-chowning between env switches (line ~325); multi-3
+          # doesn't have a natural env-switch hook, so we do it here.
+          #
+          # Longer-term fix is the HOST_UID-passthrough work tracked
+          # against the openemr container — once apache inside the
+          # container adopts the runner's uid, the volume mount points
+          # would be created with runner ownership in the first place.
+          for dir in openemr-wt-multi-easy openemr-wt-multi-light openemr-wt-multi-redis; do
+              sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}/${dir}"
+          done
+
+      - name: Down + remove all three worktrees (auto-chown handles container-written files)
         working-directory: openemr
         run: |
-          # Stacks still running → openemr-cmd's auto-chown step from #833
-          # handles the root-owned bind-mount files for each remove. No
-          # manual host-side chown needed.
+          # Stacks still running → openemr-cmd's auto-chown step from
+          # #833 fires before each compose down to handle any apache-
+          # written files that the pre-remove sudo chown missed (the
+          # interval between that step and this one is short, but the
+          # container could have written log/cache files in that
+          # window). Volume-shadowed host dirs were already handled
+          # by the pre-remove chown above.
           echo y | openemr-cmd worktree remove multi-easy
           echo y | openemr-cmd worktree remove multi-light
           echo y | openemr-cmd worktree remove multi-redis
@@ -1277,16 +1309,18 @@ jobs:
         working-directory: openemr-wt-prek-e2e
         run: |
           # Stage a deliberately clean .txt file at the repo root.
-          # *.txt isn't in openemr's .gitignore (only tmp/ is). Single
-          # line, LF newline, no trailing whitespace, no typo — so
-          # pre-commit's auto-fixers (trailing-whitespace, end-of-file-
-          # fixer, mixed-line-ending) + codespell pass clean and
+          # *.txt isn't in openemr's .gitignore (only tmp/ is). NOTE:
+          # filename must NOT start with `.` — codespell skips dotfiles
+          # by default, which would silently pass TEST 2's typo check.
+          # Single line, LF newline, no trailing whitespace, no typo —
+          # so pre-commit's auto-fixers (trailing-whitespace, end-of-
+          # file-fixer, mixed-line-ending) + codespell pass clean and
           # control falls through to the commit-msg hook, which routes
           # through the openemr-cmd shim into the container's
           # conventional-commits checker. "garbage no type" has no
           # type prefix → reject + non-zero git exit.
-          printf 'prek probe content\n' > .openemr-prek-probe.txt
-          git add .openemr-prek-probe.txt
+          printf 'prek probe content\n' > openemr-prek-probe.txt
+          git add openemr-prek-probe.txt
           set +e
           git commit -m "garbage no type" > /tmp/commit-msg-reject.log 2>&1
           rc=$?
@@ -1305,7 +1339,7 @@ jobs:
           # Failed commit doesn't unstage — confirm so the next test
           # reuses the same staged file rather than silently working
           # on a different index state.
-          git diff --cached --name-only | grep -Fxq ".openemr-prek-probe.txt" \
+          git diff --cached --name-only | grep -Fxq "openemr-prek-probe.txt" \
               || { echo "FAIL: file unstaged after rejected commit"; exit 1; }
 
       - name: "TEST 2 (pre-commit reject): inject codespell typo → pre-commit rejects before commit-msg"
@@ -1318,8 +1352,8 @@ jobs:
           # If the ordering ever inverted (or if pre-commit dispatch
           # silently no-op'd), this test would either succeed-where-
           # it-shouldn't or fail in the wrong place.
-          printf 'teh quick brown fox jumps over teh lazy dog\n' > .openemr-prek-probe.txt
-          git add .openemr-prek-probe.txt
+          printf 'teh quick brown fox jumps over teh lazy dog\n' > openemr-prek-probe.txt
+          git add openemr-prek-probe.txt
           set +e
           git commit -m "test(ci): prek probe" > /tmp/precommit-reject.log 2>&1
           rc=$?
@@ -1345,8 +1379,8 @@ jobs:
           # message. Both hook stages should pass; the commit should
           # actually land in the worktree's branch. HEAD advances by
           # exactly one commit and the new tree contains our file.
-          printf 'prek probe content\n' > .openemr-prek-probe.txt
-          git add .openemr-prek-probe.txt
+          printf 'prek probe content\n' > openemr-prek-probe.txt
+          git add openemr-prek-probe.txt
           head_before=$(git rev-parse HEAD)
           git commit -m "test(ci): prek probe" > /tmp/commit-accept.log 2>&1
           cat /tmp/commit-accept.log
@@ -1355,7 +1389,7 @@ jobs:
               echo "FAIL: HEAD did not advance — commit silently dropped"
               exit 1
           fi
-          git show --name-only --pretty=format: HEAD | grep -Fxq ".openemr-prek-probe.txt" \
+          git show --name-only --pretty=format: HEAD | grep -Fxq "openemr-prek-probe.txt" \
               || { echo "FAIL: probe file missing from new commit's tree"; exit 1; }
           subj=$(git log -1 --pretty=%s)
           [[ "${subj}" = "test(ci): prek probe" ]] \
@@ -1371,7 +1405,7 @@ jobs:
           # post-failure) and avoids a stray ref on the test branch
           # carrying the probe commit in the shared .git.
           git reset --hard HEAD~1
-          [[ ! -f .openemr-prek-probe.txt ]] \
+          [[ ! -f openemr-prek-probe.txt ]] \
               || { echo "FAIL: probe file still on disk after reset"; ls -la; exit 1; }
 
       - name: worktree remove prek-e2e (auto-chown handles container-owned files)
