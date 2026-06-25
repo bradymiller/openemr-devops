@@ -1218,6 +1218,22 @@ jobs:
           docker logs "${cname}" --tail 500
           exit 1
 
+      - name: One-shot chown back to runner (enables host-side writes + git commits)
+        run: |
+          # openemr's container startup chowns the whole webroot bind
+          # mount to apache (uid=1000), but `git commit` runs as the
+          # runner (different uid) and needs to write into the working
+          # tree (probe file) and update .git/worktrees/prek-e2e/index
+          # via `git add`. Chown back now that healthy confirms apache
+          # is done with its setup pass. Apache may log a few EACCES
+          # warnings on subsequent /meta/health/readyz probes, but the
+          # prek tests below don't depend on apache continuing to
+          # serve — only on the container being reachable for
+          # `docker exec` (which runs as root, sidestepping the
+          # bind-mount uid mismatch). The eventual `worktree remove`
+          # auto-chown handles the symmetric case for teardown.
+          sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}/openemr-wt-prek-e2e"
+
       - name: openemr-cmd prek-install (writes shim hooks to shared .git/hooks)
         working-directory: openemr-wt-prek-e2e
         run: |
