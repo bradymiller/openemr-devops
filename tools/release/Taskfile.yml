@@ -163,26 +163,6 @@ tasks:
         --repo={{shellQuote .REPO}}
         --notes-file={{shellQuote .OUTPUT_DIR}}/changelog.md
 
-  release:rotate:
-    desc: Apply 3-slot rotation per versions.yml (idempotent)
-    deps: [setup]
-    cmds:
-      - >-
-        php bin/rotate.php
-        --repo={{shellQuote (default "../.." .ROTATE_REPO)}}
-        {{if .CURRENT}}--current={{shellQuote .CURRENT}}{{end}}
-        {{if .NEXT}}--next={{shellQuote .NEXT}}{{end}}
-        {{if .DEV}}--dev={{shellQuote .DEV}}{{end}}
-        {{if eq .DRY_RUN "1"}}--dry-run{{end}}
-
-  release:lint-versions:
-    desc: Verify every OpenEMR version pin is enumerated in versions.yml
-    deps: [setup]
-    cmds:
-      - >-
-        php bin/lint-versions.php
-        --repo={{shellQuote (default "../.." .ROTATE_REPO)}}
-
   release:verify-tag:
     desc: Verify a release tag is annotated and well-formed per #664 spec
     requires:
@@ -204,19 +184,6 @@ tasks:
         php bin/check-vendored.php
         --consumer={{shellQuote .CONSUMER}}
         {{if .CANONICAL}}--canonical={{shellQuote .CANONICAL}}{{end}}
-
-  release:derive-slots-from-dispatch:
-    desc: Translate a repository_dispatch envelope into slot=<value> lines
-    requires:
-      vars: [EVENT_TYPE]
-    vars:
-      PAYLOAD_FILE: '{{.PAYLOAD_FILE | default "-"}}'
-    deps: [setup]
-    cmds:
-      - >-
-        php bin/derive-slots-from-dispatch.php
-        --event-type={{shellQuote .EVENT_TYPE}}
-        --payload-file={{shellQuote .PAYLOAD_FILE}}
 
   release:derive-announcement-inputs:
     desc: Emit version/tag/branch/forum_url lines for the announcements workflow
@@ -269,42 +236,8 @@ tasks:
         {{if .FORUM_URL}}--forum-url={{shellQuote .FORUM_URL}}{{end}}
         {{if .OUTPUT}}--output={{shellQuote .OUTPUT}}{{end}}
 
-  release:open-rotation-pr:
-    desc: Open or update the long-lived rotation draft PR
-    requires:
-      vars: [BRANCH, BASE]
-    deps: [setup]
-    cmds:
-      - >-
-        php bin/open-rotation-pr.php
-        --branch={{shellQuote .BRANCH}}
-        --base={{shellQuote .BASE}}
-        {{if .TITLE}}--title={{shellQuote .TITLE}}{{end}}
-        {{if .TRIGGER}}--trigger={{shellQuote .TRIGGER}}{{end}}
-        {{if .RUN_URL}}--run-url={{shellQuote .RUN_URL}}{{end}}
-        {{if .CURRENT}}--current={{shellQuote .CURRENT}}{{end}}
-        {{if .NEXT}}--next={{shellQuote .NEXT}}{{end}}
-        {{if .DEV}}--dev={{shellQuote .DEV}}{{end}}
-
-  release:push-rotation-branch:
-    desc: Force-push the rotation working tree as a single bot commit
-    requires:
-      vars: [ROTATION_BRANCH, COMMIT_MESSAGE]
-    dir: '../..'
-    env:
-      GIT_AUTHOR_NAME: openemr-release-bot[bot]
-      GIT_AUTHOR_EMAIL: openemr-release-bot[bot]@users.noreply.github.com
-      GIT_COMMITTER_NAME: openemr-release-bot[bot]
-      GIT_COMMITTER_EMAIL: openemr-release-bot[bot]@users.noreply.github.com
-    cmds:
-      - git fetch origin {{shellQuote .ROTATION_BRANCH}} 2>/dev/null || true
-      - git checkout -B {{shellQuote .ROTATION_BRANCH}}
-      - git add -A
-      - git commit -m {{shellQuote .COMMIT_MESSAGE}}
-      - git push --force-with-lease origin {{shellQuote .ROTATION_BRANCH}}
-
   release:ship:
-    desc: Merge the three release PRs (infra → conductor → docs) in order (issue #705)
+    desc: Merge the two release PRs (conductor → docs) in order (issue #705)
     requires:
       vars: [VERSION, REL_BRANCH]
     deps: [setup]

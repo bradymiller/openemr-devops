@@ -27,19 +27,18 @@ final readonly class PullRequestTarget
     }
 
     /**
-     * Build the canonical infra → conductor → docs target list for a release.
+     * Build the canonical conductor → docs target list for a release.
      *
      * Branch name conventions are defined in openemr-devops#705 and #664.
-     * Conductor merges into the rel-<n> branch, the other two into master.
+     * Conductor merges into the rel-<n> branch, docs into master.
      *
      * @return list<self>
      */
     public static function forRelease(string $version, string $relBranch): array
     {
         return [
-            new self('openemr/openemr-devops', 'release-rotation/auto', 'master', RoleLabel::Infra, 1),
-            new self('openemr/openemr', "release-prep/{$relBranch}", $relBranch, RoleLabel::Conductor, 2),
-            new self('openemr/website-openemr', "release-docs/{$version}", 'master', RoleLabel::Docs, 3),
+            new self('openemr/openemr', "release-prep/{$relBranch}", $relBranch, RoleLabel::Conductor, 1),
+            new self('openemr/website-openemr', "release-docs/{$version}", 'master', RoleLabel::Docs, 2),
         ];
     }
 }

@@ -105,9 +105,10 @@ final readonly class AppPermissionProbe
         }
 
         // Committing under .github/workflows/ additionally requires
-        // workflows:write. Rotation rewrites build-{800,810,811}.yml, so this is
-        // the gap that broke release-rotation.yml; a plain-dotfile probe misses
-        // it. The stub is name-only with no `on:` trigger, so it never runs.
+        // workflows:write. Plain-dotfile probes miss this gap, and several
+        // release-mechanism workflows (build-release, release-announcements,
+        // ship-release) depend on it. The stub is name-only with no `on:`
+        // trigger, so it never runs.
         try {
             $this->api->putFile(
                 $owner,

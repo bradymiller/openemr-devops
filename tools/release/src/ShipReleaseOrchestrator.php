@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Merges the three release PRs (infra → conductor → docs) in strict order.
+ * Merges the two release PRs (conductor → docs) in strict order.
  *
  * Two-phase: a preflight pass evaluates every unmerged target's readiness and
  * refuses to merge anything if any unmerged PR is not ready (issue #705 step
@@ -40,7 +40,7 @@ final readonly class ShipReleaseOrchestrator
     }
 
     /**
-     * @param list<PullRequestTarget> $targets infra, conductor, docs (any order — sorted internally)
+     * @param list<PullRequestTarget> $targets conductor, docs (any order — sorted internally)
      */
     public function ship(array $targets): ShipReleaseResult
     {
@@ -68,7 +68,7 @@ final readonly class ShipReleaseOrchestrator
 
     /**
      * Defensive sort + uniqueness check so a caller passing targets in any
-     * order still gets infra → conductor → docs at merge time.
+     * order still gets conductor → docs at merge time.
      *
      * @param  list<PullRequestTarget> $targets
      * @return list<PullRequestTarget>

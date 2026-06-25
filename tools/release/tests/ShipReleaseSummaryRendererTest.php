@@ -25,7 +25,6 @@ final class ShipReleaseSummaryRendererTest extends TestCase
     public function testRendersHeaderModeAndResult(): void
     {
         $result = new ShipReleaseResult([
-            $this->step(RoleLabel::Infra, 'openemr/openemr-devops', ShipReleaseStepStatus::MERGED, 11, 'abc1234'),
             $this->step(RoleLabel::Conductor, 'openemr/openemr', ShipReleaseStepStatus::MERGED, 22, 'def5678'),
             $this->step(RoleLabel::Docs, 'openemr/website-openemr', ShipReleaseStepStatus::MERGED, 33, 'aaa9999'),
         ]);
@@ -37,8 +36,8 @@ final class ShipReleaseSummaryRendererTest extends TestCase
         self::assertStringContainsString('- **Result:** ✅ success', $md);
         self::assertStringContainsString('| Role | Repo | PR | Status | Detail |', $md);
         self::assertStringContainsString(
-            '| infra | `openemr/openemr-devops` '
-            . '| [#11](https://github.com/openemr/openemr-devops/pull/11) | ✅ merged | `abc1234` |',
+            '| conductor | `openemr/openemr` '
+            . '| [#22](https://github.com/openemr/openemr/pull/22) | ✅ merged | `def5678` |',
             $md,
         );
     }
@@ -46,15 +45,15 @@ final class ShipReleaseSummaryRendererTest extends TestCase
     public function testDryRunModeAndWouldMerge(): void
     {
         $result = new ShipReleaseResult([
-            $this->step(RoleLabel::Infra, 'openemr/openemr-devops', ShipReleaseStepStatus::WOULD_MERGE, 11, null),
+            $this->step(RoleLabel::Conductor, 'openemr/openemr', ShipReleaseStepStatus::WOULD_MERGE, 22, null),
         ]);
 
         $md = ShipReleaseSummaryRenderer::render('8.1.0', 'rel-810', true, $result);
 
         self::assertStringContainsString('- **Mode:** dry run (no merges performed)', $md);
         self::assertStringContainsString(
-            '| infra | `openemr/openemr-devops` '
-            . '| [#11](https://github.com/openemr/openemr-devops/pull/11) | ✅ would merge | — |',
+            '| conductor | `openemr/openemr` '
+            . '| [#22](https://github.com/openemr/openemr/pull/22) | ✅ would merge | — |',
             $md,
         );
     }
@@ -105,7 +104,7 @@ final class ShipReleaseSummaryRendererTest extends TestCase
         array $reasons = [],
     ): ShipReleaseStepResult {
         return new ShipReleaseStepResult(
-            new PullRequestTarget($repo, 'branch', 'master', $role, $role->value === 'infra' ? 1 : 2),
+            new PullRequestTarget($repo, 'branch', 'master', $role, $role->value === 'conductor' ? 1 : 2),
             $status,
             $prNumber,
             $mergeSha,

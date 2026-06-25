@@ -2,8 +2,9 @@ name: Release Permissions Check
 
 # Manual probe of the release App's installed permissions on this repo.
 # Mints an App token from the RELEASE_APP_CLIENT_ID org variable +
-# RELEASE_APP_PRIVATE_KEY org secret and
-# exercises only what tools/release/ rotation needs (per docs/release-automation-plan.md).
+# RELEASE_APP_PRIVATE_KEY org secret and exercises what the
+# release-mechanism workflows in tools/release/ need (build-release,
+# release-announcements, ship-release, dispatch fan-out).
 # Run after installing the App and after secrets rotations.
 
 on:

@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Identifier for the three sibling release PRs orchestrated by ship-release.
+ * Identifier for the two sibling release PRs orchestrated by ship-release.
  *
  * @package   openemr-devops
  * @link      https://www.open-emr.org
@@ -16,7 +16,6 @@ namespace OpenEMR\Release;
 
 enum RoleLabel: string
 {
-    case Infra = 'infra';
     case Conductor = 'conductor';
     case Docs = 'docs';
 }
