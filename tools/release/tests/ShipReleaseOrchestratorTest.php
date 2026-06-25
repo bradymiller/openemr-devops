@@ -320,7 +320,11 @@ final class ShipReleaseOrchestratorTest extends TestCase
         // A PR that was closed without merging (state=CLOSED, mergedAt=null)
         // must not be treated as "open and ready to merge".
         $api = new FakePullRequestApi();
-        $api->setSnapshot(self::CONDUCTOR_REPO, self::CONDUCTOR_BRANCH, $this->closed(202, 'sha-conductor', self::CONDUCTOR_BASE));
+        $api->setSnapshot(
+            self::CONDUCTOR_REPO,
+            self::CONDUCTOR_BRANCH,
+            $this->closed(202, 'sha-conductor', self::CONDUCTOR_BASE),
+        );
         $api->setSnapshot(self::DOCS_REPO, self::DOCS_BRANCH, $this->open(303, 'sha-docs'));
         $api->setReadiness(self::DOCS_REPO, 303, $this->ready('sha-docs'));
 
