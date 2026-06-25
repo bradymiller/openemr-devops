@@ -18,7 +18,7 @@ set -euo pipefail
 #################################################################################################
 
 # Increment the version when modify script
-VERSION="1.0.47"
+VERSION="1.0.48"
 
 # ============================================================================
 # WORKTREE STATE MANAGEMENT
@@ -835,16 +835,60 @@ cmd_worktree_remove() {
         return 0
     fi
 
-    # Probe for permission issues BEFORE any destructive op. The openemr
-    # container writes files into the bind-mounted worktree as a non-host
-    # uid (root/apache), which makes subdirectories unwritable for the host
-    # user. If we proceed without catching that, we'd:
+    echo "This will remove worktree '${branch}' at ${dir}."
+    if ! ${purge}; then echo "  --keep-volumes: Docker volumes will be preserved."; fi
+    read -rp "Continue? [y/N] " confirm
+    [[ "${confirm}" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+
+    # Best-effort auto-chown: when the openemr container is still running,
+    # ask it (as root) to chown the bind-mounted worktree back to the host
+    # uid/gid before we try to remove anything. The container writes files
+    # as root during install / drid / other admin paths; on hosts where
+    # the operator's uid != the container's apache uid, those files become
+    # unreadable + unremovable from the host side. Doing the chown from
+    # INSIDE the container (where it has root) sidesteps the manual
+    # `sudo chown -R` step that users would otherwise hit. The probe below
+    # is still the safety net — it catches anything chown missed (container
+    # not running, root-owned files outside the openemr workdir, etc.).
+    #
+    # Runs AFTER the user's y/N confirmation, not before. The chown is
+    # observable side effect for hosts where host-uid != container-apache-uid
+    # (the bind mount's ownership changes to the host user; apache in the
+    # container then cannot write to those files). On abort, that side
+    # effect would leave the stack effectively broken for continued use.
+    # Confirming first means abort genuinely leaves no trace.
+    local slug=""
+    slug=$(wt_slug "${branch}")
+    local autochown_id=""
+    autochown_id=$(docker ps \
+        --filter "label=com.docker.compose.project=openemr-${slug}" \
+        --filter "label=com.docker.compose.service=openemr" \
+        --format '{{.ID}}' 2>/dev/null | head -n 1 || true)
+    if [[ -n "${autochown_id}" ]]; then
+        # Capture uid/gid once (shellcheck SC2312: don't mask command
+        # substitution return values inside an expanded string).
+        local host_uid host_gid
+        host_uid=$(id -u)
+        host_gid=$(id -g)
+        wt_info "Auto-chowning bind mount via container (uid=${host_uid} gid=${host_gid})"
+        # `|| true`: chown failures are non-fatal; the probe below catches
+        # any unwritable dirs the chown couldn't fix.
+        docker exec -u root "${autochown_id}" \
+            chown -R "${host_uid}:${host_gid}" /var/www/localhost/htdocs/openemr \
+            2>/dev/null || true
+    fi
+
+    # Probe for permission issues before the destructive ops. After the
+    # auto-chown step above, this usually passes — but it remains as the
+    # safety net for: (a) container wasn't running, (b) root-owned files
+    # outside /var/www/localhost/htdocs/openemr, (c) chown itself failed.
+    # If we proceed without catching that, we'd:
     #   1. purge the compose volumes (wt_compose_cmd down --volumes),
     #   2. let `git worktree remove --force` unregister the worktree, and
     #   3. fail mid-rm with EACCES — leaving partial state on disk + a
     #      state entry pointing at a no-longer-registered worktree, which
     #      a chown+retry can't recover from (wt_validate_dir rejects the
-    #      now-orphan dir). Bail early with a clear chown hint instead.
+    #      now-orphan dir). Bail with a clear chown hint instead.
     # `[[ -w ${d} ]]` uses access(2) for the current uid; we walk every
     # subdir because `rm` needs write+execute on each PARENT to unlink
     # children. Not using `find -writable` (GNU-only — BSD/macOS lacks it).
@@ -860,14 +904,15 @@ cmd_worktree_remove() {
         # releases the lock — no manual release needed.
         wt_die "Cannot remove worktree '${branch}': directory '${unwritable}' is not writable by you.
 This usually means the docker container wrote files into the worktree as a
-different uid (root/apache). Restore ownership and retry:
-    sudo chown -R \"\$(id -u):\$(id -g)\" '${dir}'"
+different uid (root/apache). Two ways to recover:
+  (1) Start the stack first; the auto-chown step will fix permissions
+      from inside the container, then re-run remove:
+          openemr-cmd worktree up '${branch}'
+          openemr-cmd worktree remove '${branch}'
+  (2) Or restore ownership manually on the host (requires sudo):
+          sudo chown -R \"\$(id -u):\$(id -g)\" '${dir}'
+          openemr-cmd worktree remove '${branch}'"
     fi
-
-    echo "This will remove worktree '${branch}' at ${dir}."
-    if ! ${purge}; then echo "  --keep-volumes: Docker volumes will be preserved."; fi
-    read -rp "Continue? [y/N] " confirm
-    [[ "${confirm}" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
 
     wt_info "Stopping Docker stack"
     if ${purge}; then
