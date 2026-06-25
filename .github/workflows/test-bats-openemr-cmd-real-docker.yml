@@ -2,15 +2,17 @@ name: openemr-cmd e2e (real docker)
 
 # Tier 2 of the openemr-cmd test coverage roadmap. Unlike the hermetic
 # bats suite (test-bats-openemr-cmd.yml), this workflow exercises
-# openemr-cmd against a real openemr/openemr image. Four parallel jobs:
+# openemr-cmd against a real openemr/openemr image. Five parallel jobs:
 #   - worktree-lifecycle-e2e: full worktree lifecycle on a single
 #     worktree — add → exec → set-env refusal → down/up restart →
 #     list status → regen → set-env env-switch (easy → easy-light) →
 #     auto-chown-driven remove. Covers all the user-facing worktree
 #     operations against a real running stack.
-#   - worktree-multi-concurrent-e2e: two worktrees on env=easy-light
-#     running side-by-side, distinct ports + compose projects, exec
-#     routes each to its own container (no cross-talk).
+#   - worktree-multi-concurrent-e2e: three worktrees on three distinct
+#     envs (easy / easy-light / easy-redis) running side-by-side,
+#     distinct ports + compose projects, exec routes each to its own
+#     container (no cross-talk). Also gives easy-redis its only e2e
+#     coverage in this workflow.
 #   - nonworktree-lifecycle-e2e: the plain `openemr-cmd up` / `down`
 #     path against the standard openemr/docker/development-easy stack
 #     (no worktree). Confirms top-level lifecycle, container auto-
@@ -24,13 +26,26 @@ name: openemr-cmd e2e (real docker)
 #     drift (openemr-cmd's CLI assumes a particular /root/devtools
 #     interface; this job confirms the in-container scripts still
 #     match it end-to-end).
+#   - prek-workflow-e2e: the prek-install host-hook contract end to
+#     end. Stands up a worktree, runs `openemr-cmd prek-install`,
+#     then drives real `git commit` against the worktree to confirm
+#     each hook stage fires through the openemr-cmd shim:
+#     conventional-commits rejects a bad message (commit-msg stage),
+#     codespell rejects a typo (pre-commit stage), and a clean
+#     change + good message commits successfully (both stages pass).
+#     Validates the actual user flow — `git commit` triggering the
+#     installed hooks — rather than invoking the hook scripts by
+#     hand, so a regression in the shim, hooks-dir resolution, or
+#     cwd-aware container routing surfaces here.
 #
-# Cost: ~10-20 min per job for the first three; the functional
-# round-trip job is heavier (~30-40 min, two stack startups). All four
-# run in parallel on separate runners, so wall time is bounded by the
-# slowest. Runs on every PR that touches openemr-cmd or this workflow
-# file — slower PR cycle is the deliberate trade for catching
-# regressions before merge rather than after.
+# Cost: ~10-20 min per job for the lifecycle / non-worktree / prek
+# jobs; the multi-concurrent job is ~25-35 min (three parallel
+# stacks); the functional round-trip job is heaviest at ~30-40 min
+# (two sequential stack startups). All five run in parallel on
+# separate runners, so wall time is bounded by the slowest. Runs on
+# every PR that touches openemr-cmd or this workflow file — slower
+# PR cycle is the deliberate trade for catching regressions before
+# merge rather than after.
 
 on:
   push:
@@ -456,18 +471,26 @@ jobs:
           docker logs openemr-test-e2e-mysql-1 --tail 200 2>/dev/null || true
 
   worktree-multi-concurrent-e2e:
-    # Two worktrees on the same primary repo, started one after the other,
-    # left running in parallel. Verifies that:
-    #   - offset allocation picks distinct ports across stacks (8301, 8302)
-    #   - state lock serializes the two adds without dropping either entry
+    # Three worktrees on the same primary repo, started one after the other,
+    # left running in parallel — one per supported env (easy / easy-light /
+    # easy-redis). Verifies that:
+    #   - offset allocation picks distinct ports across stacks (8301/02/03)
+    #   - state lock serializes the three adds without dropping any entry
     #   - distinct compose project names keep the docker stacks isolated
     #     (no container name collisions, no port collisions, no volume
     #     bleed-through across projects)
-    # Both stacks use the lighter 'easy-light' env to keep total wall time
-    # bounded; the full 'easy' lifecycle is covered by the job above.
-    name: e2e — two concurrent worktrees, distinct stacks
+    #   - every env variant supports the worktree lifecycle (the lifecycle
+    #     job above tests easy → easy-light; this job exercises easy-redis
+    #     as well, which the lifecycle job never touches)
+    # All three stacks run concurrently to also pressure the docker daemon
+    # / resource allocator under realistic developer-workflow load.
+    name: e2e — three concurrent worktrees (one per env), distinct stacks
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    # Bumped from 30 → 40 to absorb the third stack's parallel start.
+    # Healthy-poll budget per stack is ~15 min and they boot in parallel,
+    # but the docker daemon serializes layer pulls and the runner shares
+    # CPU/disk across all three composer-install passes.
+    timeout-minutes: 40
     steps:
       - name: Checkout openemr-devops (for openemr-cmd)
         uses: actions/checkout@v7
@@ -495,149 +518,167 @@ jobs:
           jq --version
           df -h /
 
-      - name: worktree add multi-a + multi-b (sequential, both --start)
+      - name: worktree add multi-easy + multi-light + multi-redis (one per env, all --start)
         working-directory: openemr
         env:
           WT_CANONICAL_URL: file://${{ github.workspace }}/openemr
         run: |
-          # The state lock means we can't truly parallelize the two `add`
-          # invocations from a shell perspective — they'd serialize on the
-          # lock anyway. Run them sequentially; the concurrency assertion is
-          # that BOTH end up with their own offset/dir/project entries and
-          # BOTH stacks come up alongside one another.
-          openemr-cmd worktree add multi-a -b --base master --start --env easy-light
-          openemr-cmd worktree add multi-b -b --base master --start --env easy-light
+          # Three stacks side-by-side, one per supported env. The state lock
+          # forces these to serialize anyway; the concurrency assertion is
+          # that each ends up with its own offset/dir/project entry and
+          # all three stacks come up alongside one another. Covers every
+          # env variant (easy / easy-light / easy-redis) in this one job;
+          # the lifecycle + non-worktree + functional jobs all use easy.
+          openemr-cmd worktree add multi-easy  -b --base master --start --env easy
+          openemr-cmd worktree add multi-light -b --base master --start --env easy-light
+          openemr-cmd worktree add multi-redis -b --base master --start --env easy-redis
           openemr-cmd worktree list
 
-      - name: State has both entries with distinct offsets
+      - name: State has all three entries with distinct offsets + envs
         working-directory: openemr
         run: |
           jq . .worktrees.json
-          # Both entries present.
-          jq -e '."multi-a" and ."multi-b"' .worktrees.json >/dev/null \
+          # All three entries present.
+          jq -e '."multi-easy" and ."multi-light" and ."multi-redis"' .worktrees.json >/dev/null \
               || { echo "FAIL: missing state entry"; cat .worktrees.json; exit 1; }
           # Distinct offsets (proves wt_next_offset didn't hand out duplicates).
-          oa=$(jq -r '."multi-a".offset' .worktrees.json)
-          ob=$(jq -r '."multi-b".offset' .worktrees.json)
-          if [[ "${oa}" = "${ob}" ]]; then
-              echo "FAIL: both entries share offset ${oa}"
+          oe=$(jq -r '."multi-easy".offset'  .worktrees.json)
+          ol=$(jq -r '."multi-light".offset' .worktrees.json)
+          or=$(jq -r '."multi-redis".offset' .worktrees.json)
+          uniq_count=$(printf '%s\n%s\n%s\n' "${oe}" "${ol}" "${or}" | sort -u | wc -l)
+          if [[ "${uniq_count}" -ne 3 ]]; then
+              echo "FAIL: offsets not distinct (easy=${oe} light=${ol} redis=${or})"
               exit 1
           fi
-          echo "offsets: multi-a=${oa}, multi-b=${ob}"
+          # Each entry pinned to its own env in state.
+          [[ "$(jq -r '."multi-easy".env'  .worktrees.json)" = "easy"       ]] || { echo "FAIL: multi-easy env"; exit 1; }
+          [[ "$(jq -r '."multi-light".env' .worktrees.json)" = "easy-light" ]] || { echo "FAIL: multi-light env"; exit 1; }
+          [[ "$(jq -r '."multi-redis".env' .worktrees.json)" = "easy-redis" ]] || { echo "FAIL: multi-redis env"; exit 1; }
+          echo "offsets: easy=${oe}, light=${ol}, redis=${or}"
 
-      - name: Wait for BOTH openemr containers to become healthy
+      - name: Wait for ALL THREE openemr containers to become healthy
         run: |
-          # easy-light's openemr container uses the same healthcheck contract
-          # as the easy stack: start_period: 3m. Poll both up to ~15 min;
-          # bail as soon as either reports unhealthy.
-          cname_a="openemr-multi-a-openemr-1"
-          cname_b="openemr-multi-b-openemr-1"
+          # All three stacks' openemr containers share the same healthcheck
+          # contract (start_period: 3m). Poll all three up to ~15 min; bail
+          # as soon as any reports unhealthy.
+          cname_e="openemr-multi-easy-openemr-1"
+          cname_l="openemr-multi-light-openemr-1"
+          cname_r="openemr-multi-redis-openemr-1"
           for i in $(seq 1 90); do
-            sa=$(docker inspect --format='{{.State.Health.Status}}' "${cname_a}" 2>/dev/null || echo missing)
-            sb=$(docker inspect --format='{{.State.Health.Status}}' "${cname_b}" 2>/dev/null || echo missing)
-            echo "[${i}/90 @ $((i*10))s] multi-a=${sa} multi-b=${sb}"
-            if [[ "${sa}" = "healthy" && "${sb}" = "healthy" ]]; then
-                echo "both containers healthy"
+            se=$(docker inspect --format='{{.State.Health.Status}}' "${cname_e}" 2>/dev/null || echo missing)
+            sl=$(docker inspect --format='{{.State.Health.Status}}' "${cname_l}" 2>/dev/null || echo missing)
+            sr=$(docker inspect --format='{{.State.Health.Status}}' "${cname_r}" 2>/dev/null || echo missing)
+            echo "[${i}/90 @ $((i*10))s] easy=${se} light=${sl} redis=${sr}"
+            if [[ "${se}" = "healthy" && "${sl}" = "healthy" && "${sr}" = "healthy" ]]; then
+                echo "all three containers healthy"
                 exit 0
             fi
-            if [[ "${sa}" = "unhealthy" || "${sb}" = "unhealthy" ]]; then
+            if [[ "${se}" = "unhealthy" || "${sl}" = "unhealthy" || "${sr}" = "unhealthy" ]]; then
                 echo "FAIL: a container reported unhealthy"
-                docker logs "${cname_a}" --tail 200 || true
-                docker logs "${cname_b}" --tail 200 || true
+                docker logs "${cname_e}" --tail 200 || true
+                docker logs "${cname_l}" --tail 200 || true
+                docker logs "${cname_r}" --tail 200 || true
                 exit 1
             fi
             sleep 10
           done
-          echo "FAIL: both containers did not reach healthy in ~15 min"
+          echo "FAIL: all three containers did not reach healthy in ~15 min"
           docker ps -a
           exit 1
 
-      - name: HTTP smoke on BOTH ports (8301, 8302 — no cross-talk)
+      - name: HTTP smoke on all three ports (no cross-talk)
+        working-directory: openemr
         run: |
-          # easy-light at offset 1 and 2 → ports 8301 and 8302.
-          # Verify each port responds, then verify they're talking to
-          # DIFFERENT stacks by hitting a per-stack identifier. The simplest
-          # cross-talk check: ensure each port's container hostname (from
-          # docker exec) is the OTHER container's hostname.
-          for port in 8301 8302; do
+          # Offsets 1/2/3 → ports 8301/8302/8303. Whichever offset jq
+          # captured (insertion order is preserved by wt_next_offset
+          # filling gaps), compute the port = 8300 + offset.
+          oe=$(jq -r '."multi-easy".offset'  .worktrees.json)
+          ol=$(jq -r '."multi-light".offset' .worktrees.json)
+          or=$(jq -r '."multi-redis".offset' .worktrees.json)
+          for entry in "easy:${oe}" "light:${ol}" "redis:${or}"; do
+            label="${entry%%:*}"
+            port=$((8300 + ${entry##*:}))
             ok=""
             for i in $(seq 1 12); do
               code=$(curl -s -o /dev/null -w "%{http_code}" \
                   --connect-timeout 5 --max-time 10 \
                   "http://localhost:${port}/" || true)
-              echo "[${port}/${i}/12] HTTP ${code}"
+              echo "[${label} :${port} ${i}/12] HTTP ${code}"
               case "${code}" in
                 200|302|303) ok=1; break ;;
               esac
               sleep 5
             done
-            [[ -n "${ok}" ]] || { echo "FAIL: port ${port} did not respond"; exit 1; }
+            [[ -n "${ok}" ]] || { echo "FAIL: ${label} (port ${port}) did not respond"; exit 1; }
           done
-          # Cross-talk check: container IDs should differ between the two
-          # compose projects (sanity that we have two real stacks, not one
-          # serving two ports).
-          id_a=$(docker ps --filter "label=com.docker.compose.project=openemr-multi-a" \
-                          --filter "label=com.docker.compose.service=openemr" \
-                          --format '{{.ID}}' | head -n1)
-          id_b=$(docker ps --filter "label=com.docker.compose.project=openemr-multi-b" \
-                          --filter "label=com.docker.compose.service=openemr" \
-                          --format '{{.ID}}' | head -n1)
-          if [[ -z "${id_a}" || -z "${id_b}" || "${id_a}" = "${id_b}" ]]; then
-              echo "FAIL: container ids not distinct (a='${id_a}' b='${id_b}')"
+          # Cross-talk check: each compose project exposes a distinct
+          # openemr container id. Confirms we have three real stacks,
+          # not one serving three ports somehow.
+          id_e=$(docker ps --filter "label=com.docker.compose.project=openemr-multi-easy"  --filter "label=com.docker.compose.service=openemr" --format '{{.ID}}' | head -n1)
+          id_l=$(docker ps --filter "label=com.docker.compose.project=openemr-multi-light" --filter "label=com.docker.compose.service=openemr" --format '{{.ID}}' | head -n1)
+          id_r=$(docker ps --filter "label=com.docker.compose.project=openemr-multi-redis" --filter "label=com.docker.compose.service=openemr" --format '{{.ID}}' | head -n1)
+          uniq=$(printf '%s\n%s\n%s\n' "${id_e}" "${id_l}" "${id_r}" | sort -u | wc -l)
+          if [[ -z "${id_e}" || -z "${id_l}" || -z "${id_r}" || "${uniq}" -ne 3 ]]; then
+              echo "FAIL: container ids not all distinct (easy='${id_e}' light='${id_l}' redis='${id_r}')"
               docker ps -a
               exit 1
           fi
-          echo "two distinct openemr containers: a=${id_a:0:12} b=${id_b:0:12}"
+          echo "three distinct openemr containers: easy=${id_e:0:12} light=${id_l:0:12} redis=${id_r:0:12}"
 
-      - name: worktree exec multi-a + multi-b route to their own containers
+      - name: worktree exec routes each branch to its own container
         working-directory: openemr
         run: |
-          # Two different sentinels, one per branch. If exec ever crossed
-          # streams (routed multi-a's exec into multi-b's container or vice
-          # versa), the wrong sentinel would come back.
-          sent_a="multi-a-sentinel-$$"
-          sent_b="multi-b-sentinel-$$"
-          out_a=$(openemr-cmd worktree exec multi-a e "echo ${sent_a}")
-          out_b=$(openemr-cmd worktree exec multi-b e "echo ${sent_b}")
-          echo "multi-a stdout: ${out_a}"
-          echo "multi-b stdout: ${out_b}"
-          grep -Fqx "${sent_a}" <<< "${out_a}" \
-              || { echo "FAIL: multi-a exec did not return its sentinel"; exit 1; }
-          grep -Fqx "${sent_b}" <<< "${out_b}" \
-              || { echo "FAIL: multi-b exec did not return its sentinel"; exit 1; }
-          # And the OTHER sentinel must NOT appear in either output.
-          if grep -Fq "${sent_b}" <<< "${out_a}" || grep -Fq "${sent_a}" <<< "${out_b}"; then
-              echo "FAIL: exec cross-talk between worktrees"
-              exit 1
-          fi
+          # Three different sentinels, one per branch. If exec ever crossed
+          # streams (routed one branch's exec into another branch's
+          # container), the wrong sentinel would come back.
+          sent_e="multi-easy-sentinel-$$"
+          sent_l="multi-light-sentinel-$$"
+          sent_r="multi-redis-sentinel-$$"
+          out_e=$(openemr-cmd worktree exec multi-easy  e "echo ${sent_e}")
+          out_l=$(openemr-cmd worktree exec multi-light e "echo ${sent_l}")
+          out_r=$(openemr-cmd worktree exec multi-redis e "echo ${sent_r}")
+          echo "easy  stdout: ${out_e}"
+          echo "light stdout: ${out_l}"
+          echo "redis stdout: ${out_r}"
+          grep -Fqx "${sent_e}" <<< "${out_e}" || { echo "FAIL: multi-easy did not return its sentinel"; exit 1; }
+          grep -Fqx "${sent_l}" <<< "${out_l}" || { echo "FAIL: multi-light did not return its sentinel"; exit 1; }
+          grep -Fqx "${sent_r}" <<< "${out_r}" || { echo "FAIL: multi-redis did not return its sentinel"; exit 1; }
+          # No other branch's sentinel may appear in any output.
+          for combo in "${sent_l}:${out_e}" "${sent_r}:${out_e}" \
+                       "${sent_e}:${out_l}" "${sent_r}:${out_l}" \
+                       "${sent_e}:${out_r}" "${sent_l}:${out_r}"; do
+              wrong="${combo%%:*}"; output="${combo#*:}"
+              if grep -Fq "${wrong}" <<< "${output}"; then
+                  echo "FAIL: exec cross-talk — sentinel '${wrong}' appeared in unrelated output"
+                  exit 1
+              fi
+          done
 
-      - name: Down + remove BOTH worktrees
+      - name: Down + remove all three worktrees (auto-chown handles it; stacks still up)
         working-directory: openemr
         run: |
-          openemr-cmd worktree down multi-a --keep-volumes
-          openemr-cmd worktree down multi-b --keep-volumes
-          # Pre-chown both worktree dirs (same A5 workaround as the
-          # lifecycle job — the A5 contract test runs there, not here).
-          sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}/openemr-wt-multi-a"
-          sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}/openemr-wt-multi-b"
-          echo y | openemr-cmd worktree remove multi-a
-          echo y | openemr-cmd worktree remove multi-b
+          # Stacks still running → openemr-cmd's auto-chown step from #833
+          # handles the root-owned bind-mount files for each remove. No
+          # manual host-side chown needed.
+          echo y | openemr-cmd worktree remove multi-easy
+          echo y | openemr-cmd worktree remove multi-light
+          echo y | openemr-cmd worktree remove multi-redis
 
-      - name: Verify both state entries cleaned
+      - name: Verify all three state entries cleaned
         working-directory: openemr
         run: |
-          if jq -e '."multi-a" or ."multi-b"' .worktrees.json 2>/dev/null; then
+          if jq -e '."multi-easy" or ."multi-light" or ."multi-redis"' .worktrees.json 2>/dev/null; then
               echo "FAIL: a state entry remains"
               cat .worktrees.json
               exit 1
           fi
-          for dir in openemr-wt-multi-a openemr-wt-multi-b; do
+          for dir in openemr-wt-multi-easy openemr-wt-multi-light openemr-wt-multi-redis; do
               if [[ -d "${{ github.workspace }}/${dir}" ]]; then
                   echo "FAIL: ${dir} still on disk"
                   exit 1
               fi
           done
-          for proj in openemr-multi-a openemr-multi-b; do
+          for proj in openemr-multi-easy openemr-multi-light openemr-multi-redis; do
               rem=$(docker volume ls -q --filter "name=${proj}_" | wc -l)
               if [[ "${rem}" -ne 0 ]]; then
                   echo "FAIL: ${rem} volumes left for ${proj}"
@@ -645,7 +686,7 @@ jobs:
                   exit 1
               fi
           done
-          echo "both stacks cleaned"
+          echo "all three stacks cleaned"
 
       - name: Diagnostics on failure
         if: failure()
@@ -656,8 +697,8 @@ jobs:
           cat openemr/.worktrees.json 2>/dev/null || true
           echo "===== docker volume ls ====="
           docker volume ls || true
-          for c in openemr-multi-a-openemr-1 openemr-multi-b-openemr-1 \
-                   openemr-multi-a-mysql-1   openemr-multi-b-mysql-1; do
+          for c in openemr-multi-easy-openemr-1 openemr-multi-light-openemr-1 openemr-multi-redis-openemr-1 \
+                   openemr-multi-easy-mysql-1   openemr-multi-light-mysql-1   openemr-multi-redis-mysql-1; do
               echo "===== ${c} logs (last 200) ====="
               docker logs "${c}" --tail 200 2>/dev/null || true
           done
@@ -1096,3 +1137,291 @@ jobs:
           docker logs development-easy-openemr-1 --tail 500 2>/dev/null || true
           echo "===== mysql container logs (last 200) ====="
           docker logs development-easy-mysql-1 --tail 200 2>/dev/null || true
+
+  prek-workflow-e2e:
+    # Drives the prek-install host-hook contract end-to-end. Stands up
+    # an openemr worktree, installs the openemr-cmd-managed git hooks,
+    # then runs REAL `git commit` from inside the worktree to confirm:
+    #   - the commit-msg hook fires through the openemr-cmd shim and
+    #     rejects a non-conventional-commits message
+    #   - the pre-commit hook fires through the shim and rejects a
+    #     codespell-detectable typo before commit-msg ever runs
+    #   - a clean change + valid message produces a real commit (both
+    #     hook stages pass; HEAD advances; the staged file lands in
+    #     the new commit's tree)
+    # Tests the actual user flow — `git commit` triggering the
+    # installed hooks — rather than invoking the hook scripts by
+    # hand. A regression in shim wiring, prek_hooks_dir's
+    # git-common-dir resolution, the cwd-aware container routing,
+    # or hook exit-code propagation surfaces here.
+    name: e2e — prek install + real git commit (reject, reject, accept)
+    runs-on: ubuntu-22.04
+    # One stack startup (~10-15 min to healthy on the default easy env)
+    # + three sequential commits routing through the container. Each
+    # commit is fast (codespell + conventional-commits are sub-second
+    # hooks); the dominant cost is the boot.
+    timeout-minutes: 30
+    steps:
+      - name: Checkout openemr-devops (for openemr-cmd)
+        uses: actions/checkout@v7
+        with:
+          path: openemr-devops
+          persist-credentials: false
+
+      - name: Install openemr-cmd to /usr/local/bin
+        run: |
+          sudo install -m 0755 openemr-devops/utilities/openemr-cmd/openemr-cmd /usr/local/bin/openemr-cmd
+          openemr-cmd --version || true
+
+      - name: Clone openemr/openemr (shallow)
+        uses: actions/checkout@v7
+        with:
+          repository: openemr/openemr
+          path: openemr
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Pre-flight (versions + disk)
+        run: |
+          docker --version
+          docker compose version
+          jq --version
+          df -h /
+
+      - name: worktree add prek-e2e -b --base master --start
+        working-directory: openemr
+        env:
+          WT_CANONICAL_URL: file://${{ github.workspace }}/openemr
+        run: |
+          # Default env (easy) — matches every other single-env e2e
+          # in this workflow (non-worktree lifecycle, functional
+          # round-trip). The prek workflow itself doesn't depend on
+          # env-specific services; using the default keeps coverage
+          # focused on what most developers actually run.
+          openemr-cmd worktree add prek-e2e -b --base master --start
+          openemr-cmd worktree list
+
+      - name: Wait for openemr container to become healthy
+        run: |
+          cname="openemr-prek-e2e-openemr-1"
+          for i in $(seq 1 90); do
+            status=$(docker inspect --format='{{.State.Health.Status}}' "${cname}" 2>/dev/null || echo "missing")
+            echo "[${i}/90 @ $((i*10))s] status=${status}"
+            case "${status}" in
+              healthy) echo "container reported healthy"; exit 0 ;;
+              unhealthy) echo "FAIL: container reported unhealthy"; docker logs "${cname}" --tail 200; exit 1 ;;
+            esac
+            sleep 10
+          done
+          echo "FAIL: container never became healthy in ~15 min"
+          docker ps -a
+          docker logs "${cname}" --tail 500
+          exit 1
+
+      - name: openemr-cmd prek-install (writes shim hooks to shared .git/hooks)
+        working-directory: openemr-wt-prek-e2e
+        run: |
+          # Run from inside the worktree so prek_hooks_dir resolves
+          # git-common-dir to the SHARED hooks dir under the primary
+          # clone (openemr/.git/hooks), mirroring what a developer
+          # in their worktree would actually do. The shim hooks then
+          # re-exec openemr-cmd's prek dispatch whenever git fires
+          # them from any linked worktree on this primary.
+          openemr-cmd prek-install
+
+      - name: Verify the two managed hook files exist + carry the marker
+        run: |
+          # prek-install writes to git-common-dir/hooks; for the
+          # primary clone that's openemr/.git/hooks (worktrees share
+          # via gitcommondir). Both stages must be present, executable,
+          # and contain the __openemr_cmd_prek_hook__ marker so
+          # cmd_prek_uninstall later can recognize them as managed.
+          for stage in pre-commit commit-msg; do
+              target="openemr/.git/hooks/${stage}"
+              if [[ ! -x "${target}" ]]; then
+                  echo "FAIL: ${target} missing or not executable"
+                  exit 1
+              fi
+              grep -q "__openemr_cmd_prek_hook__" "${target}" \
+                  || { echo "FAIL: ${target} missing prek hook marker"; exit 1; }
+              echo "----- ${stage} hook -----"
+              cat "${target}"
+          done
+
+      - name: Configure git identity inside the worktree
+        working-directory: openemr-wt-prek-e2e
+        run: |
+          # `git commit` refuses without committer identity. --local
+          # scopes the config to this clone so it doesn't leak into
+          # the runner's global config.
+          git config --local user.email "prek-e2e@example.invalid"
+          git config --local user.name  "prek e2e"
+
+      - name: "TEST 1 (commit-msg reject): clean file + bad message → conventional-commits rejects"
+        working-directory: openemr-wt-prek-e2e
+        run: |
+          # Stage a deliberately clean .txt file at the repo root.
+          # *.txt isn't in openemr's .gitignore (only tmp/ is). Single
+          # line, LF newline, no trailing whitespace, no typo — so
+          # pre-commit's auto-fixers (trailing-whitespace, end-of-file-
+          # fixer, mixed-line-ending) + codespell pass clean and
+          # control falls through to the commit-msg hook, which routes
+          # through the openemr-cmd shim into the container's
+          # conventional-commits checker. "garbage no type" has no
+          # type prefix → reject + non-zero git exit.
+          printf 'prek probe content\n' > .openemr-prek-probe.txt
+          git add .openemr-prek-probe.txt
+          set +e
+          git commit -m "garbage no type" > /tmp/commit-msg-reject.log 2>&1
+          rc=$?
+          set -e
+          cat /tmp/commit-msg-reject.log
+          if [[ "${rc}" = "0" ]]; then
+              echo "FAIL: bad-message commit unexpectedly succeeded"
+              git log -1
+              exit 1
+          fi
+          # Surface the actual rejection so a silent shim short-circuit
+          # (the hook printing nothing but exiting non-zero) fails
+          # loudly here rather than masquerading as "test passed".
+          grep -Eqi "(conventional[- ]commits?|commit message)" /tmp/commit-msg-reject.log \
+              || { echo "FAIL: rejection log doesn't reference conventional-commits"; exit 1; }
+          # Failed commit doesn't unstage — confirm so the next test
+          # reuses the same staged file rather than silently working
+          # on a different index state.
+          git diff --cached --name-only | grep -Fxq ".openemr-prek-probe.txt" \
+              || { echo "FAIL: file unstaged after rejected commit"; exit 1; }
+
+      - name: "TEST 2 (pre-commit reject): inject codespell typo → pre-commit rejects before commit-msg"
+        working-directory: openemr-wt-prek-e2e
+        run: |
+          # 'teh' is a classic codespell-detected typo. Restage the
+          # file with bad content; even with a perfectly valid
+          # conventional-commits message, pre-commit must fire FIRST
+          # and reject — so the commit-msg hook never gets to run.
+          # If the ordering ever inverted (or if pre-commit dispatch
+          # silently no-op'd), this test would either succeed-where-
+          # it-shouldn't or fail in the wrong place.
+          printf 'teh quick brown fox jumps over teh lazy dog\n' > .openemr-prek-probe.txt
+          git add .openemr-prek-probe.txt
+          set +e
+          git commit -m "test(ci): prek probe" > /tmp/precommit-reject.log 2>&1
+          rc=$?
+          set -e
+          cat /tmp/precommit-reject.log
+          if [[ "${rc}" = "0" ]]; then
+              echo "FAIL: typo commit unexpectedly succeeded"
+              git log -1
+              exit 1
+          fi
+          # codespell prints both a banner and the offending word;
+          # assert both so a silent failure (hook returns non-zero
+          # with no output) can't pass.
+          grep -qi "codespell" /tmp/precommit-reject.log \
+              || { echo "FAIL: pre-commit log doesn't mention codespell"; exit 1; }
+          grep -q "teh" /tmp/precommit-reject.log \
+              || { echo "FAIL: codespell didn't flag the injected typo"; exit 1; }
+
+      - name: "TEST 3 (happy path): clean file + good message → commit lands"
+        working-directory: openemr-wt-prek-e2e
+        run: |
+          # Restore clean content + use a valid conventional-commits
+          # message. Both hook stages should pass; the commit should
+          # actually land in the worktree's branch. HEAD advances by
+          # exactly one commit and the new tree contains our file.
+          printf 'prek probe content\n' > .openemr-prek-probe.txt
+          git add .openemr-prek-probe.txt
+          head_before=$(git rev-parse HEAD)
+          git commit -m "test(ci): prek probe" > /tmp/commit-accept.log 2>&1
+          cat /tmp/commit-accept.log
+          head_after=$(git rev-parse HEAD)
+          if [[ "${head_before}" = "${head_after}" ]]; then
+              echo "FAIL: HEAD did not advance — commit silently dropped"
+              exit 1
+          fi
+          git show --name-only --pretty=format: HEAD | grep -Fxq ".openemr-prek-probe.txt" \
+              || { echo "FAIL: probe file missing from new commit's tree"; exit 1; }
+          subj=$(git log -1 --pretty=%s)
+          [[ "${subj}" = "test(ci): prek probe" ]] \
+              || { echo "FAIL: commit subject = '${subj}' (expected 'test(ci): prek probe')"; exit 1; }
+          echo "happy-path commit landed: $(git rev-parse --short HEAD) ${subj}"
+
+      - name: Rewind the test commit before teardown
+        working-directory: openemr-wt-prek-e2e
+        run: |
+          # `worktree remove` doesn't care about uncommitted state —
+          # it nukes the worktree dir entirely — but rewinding keeps
+          # cleanup symmetric (state visible if someone inspects
+          # post-failure) and avoids a stray ref on the test branch
+          # carrying the probe commit in the shared .git.
+          git reset --hard HEAD~1
+          [[ ! -f .openemr-prek-probe.txt ]] \
+              || { echo "FAIL: probe file still on disk after reset"; ls -la; exit 1; }
+
+      - name: worktree remove prek-e2e (auto-chown handles container-owned files)
+        working-directory: openemr
+        run: |
+          # Stack is still up; the auto-chown step from #833 fixes
+          # the bind mount's apache-owned files before remove proceeds.
+          echo y | openemr-cmd worktree remove prek-e2e
+
+      - name: prek-uninstall (cleans the shim hooks from the shared .git/hooks)
+        working-directory: openemr
+        run: |
+          # The shim hooks installed earlier live in openemr/.git/hooks
+          # (gitcommondir), not the now-deleted worktree's gitdir, so
+          # they outlive `worktree remove`. Uninstall here so the
+          # hygiene check below sees a clean state, and so any follow-
+          # up worktree on this clone doesn't inherit a stale shim
+          # from a previous test run.
+          openemr-cmd prek-uninstall
+          for stage in pre-commit commit-msg; do
+              target=".git/hooks/${stage}"
+              if [[ -e "${target}" ]]; then
+                  echo "FAIL: ${target} still present after prek-uninstall"
+                  ls -la .git/hooks/
+                  exit 1
+              fi
+          done
+
+      - name: Verify state hygiene
+        working-directory: openemr
+        run: |
+          if jq -e '."prek-e2e"' .worktrees.json 2>/dev/null; then
+              echo "FAIL: state entry still present"
+              cat .worktrees.json
+              exit 1
+          fi
+          if [[ -d "${{ github.workspace }}/openemr-wt-prek-e2e" ]]; then
+              echo "FAIL: worktree dir still on disk"
+              exit 1
+          fi
+          remaining=$(docker volume ls -q --filter "name=openemr-prek-e2e_" | wc -l)
+          if [[ "${remaining}" -ne 0 ]]; then
+              echo "FAIL: ${remaining} compose volumes left over"
+              docker volume ls --filter "name=openemr-prek-e2e_"
+              exit 1
+          fi
+          echo "prek-e2e fully cleaned"
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          echo "===== docker ps -a ====="
+          docker ps -a || true
+          echo "===== .worktrees.json ====="
+          cat openemr/.worktrees.json 2>/dev/null || true
+          echo "===== installed hook files ====="
+          ls -la openemr/.git/hooks/ 2>/dev/null || true
+          for stage in pre-commit commit-msg; do
+              echo "===== ${stage} hook contents ====="
+              cat "openemr/.git/hooks/${stage}" 2>/dev/null || true
+          done
+          echo "===== last commit-msg-reject log ====="
+          cat /tmp/commit-msg-reject.log 2>/dev/null || true
+          echo "===== last precommit-reject log ====="
+          cat /tmp/precommit-reject.log 2>/dev/null || true
+          echo "===== last commit-accept log ====="
+          cat /tmp/commit-accept.log 2>/dev/null || true
+          echo "===== openemr container logs (last 500) ====="
+          docker logs openemr-prek-e2e-openemr-1 --tail 500 2>/dev/null || true
