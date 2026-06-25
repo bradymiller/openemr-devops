@@ -847,60 +847,63 @@ jobs:
               || { echo "FAIL: could not capture numeric demo_count; got '${demo_count}'"; exit 1; }
           [[ "${demo_count}" -gt 0 ]] \
               || { echo "FAIL: drid produced no demo patients (count=0)"; exit 1; }
+          # Pass demo_count through so the post-irp step can confirm irp
+          # actually added rows (it was silently no-op'ing before
+          # openemr/openemr#12632 — this regression guard catches that).
+          echo "DEMO_COUNT=${demo_count}" >> "${GITHUB_ENV}"
 
       - name: stack-A — irp 3 (layer random patients on top of demo data)
         working-directory: openemr/docker/development-easy
         run: |
           # irp dispatches /root/devtools import-random-patients 3 with
-          # ENV_VAR=OPENEMR_ENABLE_CCDA_IMPORT=1. The devtools script's
-          # exact insertion semantics (additive vs replace, exact count
-          # vs subset) are openemr core's concern — we don't pin them
-          # here. The headline assertion further down is "snapshot a
-          # state, restore on a fresh stack, get the same count back",
-          # which works regardless of what irp's count math turns out
-          # to be.
+          # ENV_VAR=OPENEMR_ENABLE_CCDA_IMPORT=1.
           openemr-cmd irp 3
 
-      - name: stack-A — capture pre-backup patient_data count (the headline number)
+      - name: stack-A — capture pre-backup count + assert irp actually added rows
         working-directory: openemr/docker/development-easy
         run: |
-          # This is the count we'll compare against AFTER restore on a
-          # fresh stack. Whatever drid + irp produced — that's the
-          # state the snapshot captured, and that's what restore must
-          # reproduce. Don't compute an expected value from first
-          # principles (drid's demo size and irp's insertion semantics
-          # both belong to openemr core and may evolve).
+          # Two assertions in one step:
+          #   1. count > demo_count — irp actually inserted rows (regression
+          #      guard for the silent-no-op bug fixed in openemr/openemr#12632).
+          #   2. capture the count into $GITHUB_ENV so the post-restore
+          #      assertion can compare against it, without depending on
+          #      irp's exact insertion semantics (drid's demo set size and
+          #      irp's count math both belong to openemr core and may evolve).
           count=$(openemr-cmd e "mysql -u openemr -popenemr -h mysql openemr -sN -e 'SELECT COUNT(*) FROM patient_data' 2>/dev/null" | tr -d '[:space:]')
-          echo "stack-A pre-backup patient_data count: '${count}'"
+          echo "stack-A pre-backup patient_data count: '${count}' (demo ${DEMO_COUNT})"
           [[ "${count}" =~ ^[0-9]+$ ]] \
               || { echo "FAIL: could not capture numeric pre-backup count; got '${count}'"; exit 1; }
-          [[ "${count}" -gt 0 ]] \
-              || { echo "FAIL: expected at least 1 patient before backup, got 0"; exit 1; }
+          if [[ "${count}" -le "${DEMO_COUNT}" ]]; then
+              echo "FAIL: irp 3 did not increase patient_data count (was ${DEMO_COUNT}, still ${count})"
+              echo "      this is the openemr/openemr#12632 regression signature."
+              exit 1
+          fi
           echo "EXPECTED_AFTER_RESTORE=${count}" >> "${GITHUB_ENV}"
 
       - name: stack-A — bs roundtrip-snap (create backup)
         working-directory: openemr/docker/development-easy
         run: openemr-cmd bs roundtrip-snap
 
-      - name: stack-A — verify /snapshots/roundtrip-snap exists in container
+      - name: stack-A — verify /snapshots/roundtrip-snap.tgz exists in container
         working-directory: openemr/docker/development-easy
         run: |
-          # /root/devtools backup writes to /snapshots/<name>; the exact
-          # filename layout (file vs directory tree, suffix or not) is
-          # openemr core's concern. Use `test -e` inside the container
-          # (via openemr-cmd e) — works for either form.
+          # /root/devtools backup writes to /snapshots/<name>.tgz — the bare
+          # name passed to bs becomes a tarball under /snapshots. (rs takes
+          # the bare name too and strips .tgz internally; gc/pc are
+          # symmetric with the actual filename including .tgz.)
           openemr-cmd e "ls -la /snapshots/"
-          openemr-cmd e "test -e /snapshots/roundtrip-snap" \
-              || { echo "FAIL: /snapshots/roundtrip-snap missing in container after bs"; exit 1; }
+          openemr-cmd e "test -f /snapshots/roundtrip-snap.tgz" \
+              || { echo "FAIL: /snapshots/roundtrip-snap.tgz missing in container after bs"; exit 1; }
 
-      - name: stack-A — gc roundtrip-snap → host /tmp
+      - name: stack-A — gc roundtrip-snap.tgz → host /tmp/capsule-host
         working-directory: openemr/docker/development-easy
         run: |
+          # gc copies /snapshots/<arg> (no .tgz added). Pass the full
+          # filename including .tgz.
           mkdir -p /tmp/capsule-host
-          openemr-cmd gc roundtrip-snap /tmp/capsule-host
+          openemr-cmd gc roundtrip-snap.tgz /tmp/capsule-host
           ls -la /tmp/capsule-host/
-          # `test -e` (via [[ -e ]]) handles either file or directory.
-          [[ -e /tmp/capsule-host/roundtrip-snap ]] \
+          [[ -f /tmp/capsule-host/roundtrip-snap.tgz ]] \
               || { echo "FAIL: capsule not copied to host"; exit 1; }
 
       - name: stack-A — down -v (clean slate)
@@ -939,17 +942,17 @@ jobs:
           # restore test by leaving the 3 patients from stack-A in place.
           [[ "${count}" = "0" ]] || { echo "FAIL: expected 0 patients on fresh stack-B, got '${count}'"; exit 1; }
 
-      - name: stack-B — pc /tmp/capsule-host/roundtrip-snap (copy capsule back in)
+      - name: stack-B — pc /tmp/capsule-host/roundtrip-snap.tgz (copy capsule back in)
         working-directory: openemr/docker/development-easy
         run: |
-          # Pass the path through unchanged — pc's docker cp works for
-          # either a file or a directory, so converting a dir to a .tgz
-          # would only break the name lookup that rs does next
-          # (rs expects /snapshots/roundtrip-snap, not /snapshots/<name>.tgz).
-          openemr-cmd pc /tmp/capsule-host/roundtrip-snap
+          # pc copies <host-file> to /snapshots/ (preserving basename).
+          # rs strips .tgz internally — `rs roundtrip-snap` reads
+          # /snapshots/roundtrip-snap.tgz. So we just shuttle the
+          # actual .tgz produced by bs back and forth.
+          openemr-cmd pc /tmp/capsule-host/roundtrip-snap.tgz
           openemr-cmd e "ls -la /snapshots/"
-          openemr-cmd e "test -e /snapshots/roundtrip-snap" \
-              || { echo "FAIL: /snapshots/roundtrip-snap missing in container after pc"; exit 1; }
+          openemr-cmd e "test -f /snapshots/roundtrip-snap.tgz" \
+              || { echo "FAIL: /snapshots/roundtrip-snap.tgz missing in container after pc"; exit 1; }
 
       - name: stack-B — rs roundtrip-snap (restore from capsule)
         working-directory: openemr/docker/development-easy
