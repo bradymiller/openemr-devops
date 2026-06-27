@@ -350,6 +350,37 @@ final class ShipReleaseOrchestratorTest extends TestCase
         (new ShipReleaseOrchestrator($api, new FakeClock()))->ship($targets);
     }
 
+    public function testWrongTargetCountThrowsLogicException(): void
+    {
+        // Stale callers (e.g., still passing the pre-collapse 3-PR list,
+        // or a single Conductor-only target) must fail fast rather than
+        // silently half-shipping.
+        $api = new FakePullRequestApi();
+        $targets = [
+            new PullRequestTarget('a/x', 'b1', 'master', RoleLabel::Conductor, 1),
+        ];
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('exactly 2 targets');
+        (new ShipReleaseOrchestrator($api, new FakeClock()))->ship($targets);
+    }
+
+    public function testWrongTargetRoleSetThrowsLogicException(): void
+    {
+        // Two targets of correct count but wrong roles (e.g., two
+        // Conductors, or a Conductor + something else) violates the
+        // {Conductor, Docs} contract and must fail fast.
+        $api = new FakePullRequestApi();
+        $targets = [
+            new PullRequestTarget('a/x', 'b1', 'master', RoleLabel::Conductor, 1),
+            new PullRequestTarget('a/y', 'b2', 'master', RoleLabel::Conductor, 2),
+        ];
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('{Conductor, Docs}');
+        (new ShipReleaseOrchestrator($api, new FakeClock()))->ship($targets);
+    }
+
     public function testMergeFailureRetractsApprovalStatus(): void
     {
         // Verify the success status is followed by a failure status on the

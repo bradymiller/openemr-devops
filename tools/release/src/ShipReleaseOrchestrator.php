@@ -67,14 +67,32 @@ final readonly class ShipReleaseOrchestrator
     }
 
     /**
-     * Defensive sort + uniqueness check so a caller passing targets in any
-     * order still gets conductor → docs at merge time.
+     * Defensive sort + contract check. The 2-PR ship contract requires
+     * exactly the Conductor and Docs targets in any order; this method
+     * fails fast on a stale caller passing the wrong shape (e.g., an
+     * extra target, a missing one, or duplicate mergeOrder values),
+     * since the alternative is a silent half-failure deep in the
+     * downstream merge logic.
      *
      * @param  list<PullRequestTarget> $targets
      * @return list<PullRequestTarget>
      */
     private function sortByMergeOrder(array $targets): array
     {
+        if (count($targets) !== 2) {
+            throw new \LogicException(
+                'ship-release expects exactly 2 targets (Conductor + Docs); got ' . count($targets),
+            );
+        }
+        $roles = array_map(static fn (PullRequestTarget $t): string => $t->roleLabel->value, $targets);
+        sort($roles);
+        $expected = [RoleLabel::Conductor->value, RoleLabel::Docs->value];
+        sort($expected);
+        if ($roles !== $expected) {
+            throw new \LogicException(
+                'ship-release targets must be {Conductor, Docs}; got {' . implode(', ', $roles) . '}',
+            );
+        }
         $orders = array_map(static fn (PullRequestTarget $t): int => $t->mergeOrder, $targets);
         if (count(array_unique($orders)) !== count($orders)) {
             throw new \LogicException('ship-release targets have duplicate mergeOrder values');
