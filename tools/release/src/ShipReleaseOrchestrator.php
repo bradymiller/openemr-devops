@@ -97,6 +97,18 @@ final readonly class ShipReleaseOrchestrator
         if (count(array_unique($orders)) !== count($orders)) {
             throw new \LogicException('ship-release targets have duplicate mergeOrder values');
         }
+        // Enforce Conductor-before-Docs at the mergeOrder level too —
+        // {Conductor, Docs} with Docs.mergeOrder < Conductor.mergeOrder
+        // would pass the role-set + dedup checks above but usort would
+        // then merge Docs first, violating the strict merge sequence.
+        $conductor = $this->findRequired($targets, RoleLabel::Conductor);
+        $docs = $this->findRequired($targets, RoleLabel::Docs);
+        if ($conductor->mergeOrder >= $docs->mergeOrder) {
+            throw new \LogicException(
+                'ship-release mergeOrder must put Conductor before Docs; got Conductor='
+                . $conductor->mergeOrder . ' Docs=' . $docs->mergeOrder,
+            );
+        }
         usort(
             $targets,
             static fn (PullRequestTarget $a, PullRequestTarget $b): int => $a->mergeOrder <=> $b->mergeOrder,

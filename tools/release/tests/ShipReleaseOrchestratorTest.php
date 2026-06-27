@@ -381,6 +381,24 @@ final class ShipReleaseOrchestratorTest extends TestCase
         (new ShipReleaseOrchestrator($api, new FakeClock()))->ship($targets);
     }
 
+    public function testReversedMergeOrderThrowsLogicException(): void
+    {
+        // Correct role set {Conductor, Docs} with unique mergeOrder
+        // values, but Docs.mergeOrder < Conductor.mergeOrder. The
+        // role-set + dedup checks would pass, but usort would then put
+        // Docs first — silently violating the strict conductor → docs
+        // merge sequence. Must fail fast.
+        $api = new FakePullRequestApi();
+        $targets = [
+            new PullRequestTarget('a/x', 'b1', 'master', RoleLabel::Conductor, 2),
+            new PullRequestTarget('a/y', 'b2', 'master', RoleLabel::Docs, 1),
+        ];
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('Conductor before Docs');
+        (new ShipReleaseOrchestrator($api, new FakeClock()))->ship($targets);
+    }
+
     public function testMergeFailureRetractsApprovalStatus(): void
     {
         // Verify the success status is followed by a failure status on the
