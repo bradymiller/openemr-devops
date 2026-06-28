@@ -26,11 +26,12 @@ final class DispatchSchemaTest extends TestCase
      */
     public static function goodFixtures(): iterable
     {
-        yield 'openemr-rel-cut'        => ['good-rel-cut.json'];
-        yield 'openemr-rel-update'     => ['good-rel-update.json'];
-        yield 'openemr-tag'            => ['good-tag.json'];
-        yield 'openemr-tag (test)'     => ['good-tag-test.json'];
-        yield 'openemr-docs-binaries'  => ['good-docs-binaries.json'];
+        yield 'openemr-rel-cut'           => ['good-rel-cut.json'];
+        yield 'openemr-rel-update'        => ['good-rel-update.json'];
+        yield 'openemr-tag'               => ['good-tag.json'];
+        yield 'openemr-tag (test)'        => ['good-tag-test.json'];
+        yield 'openemr-docs-binaries'     => ['good-docs-binaries.json'];
+        yield 'release-targets-changed'   => ['good-release-targets-changed.json'];
     }
 
     /**
@@ -38,10 +39,11 @@ final class DispatchSchemaTest extends TestCase
      */
     public static function badFixtures(): iterable
     {
-        yield 'openemr-rel-cut missing prev_release'    => ['bad-rel-cut.json', 'prev_release'];
-        yield 'openemr-rel-update non-hex sha'          => ['bad-rel-update.json', 'sha'];
-        yield 'openemr-tag with dotted version'         => ['bad-tag.json', 'tag'];
-        yield 'openemr-docs-binaries empty files array' => ['bad-docs-binaries.json', 'files'];
+        yield 'openemr-rel-cut missing prev_release'      => ['bad-rel-cut.json', 'prev_release'];
+        yield 'openemr-rel-update non-hex sha'            => ['bad-rel-update.json', 'sha'];
+        yield 'openemr-tag with dotted version'           => ['bad-tag.json', 'tag'];
+        yield 'openemr-docs-binaries empty files array'   => ['bad-docs-binaries.json', 'files'];
+        yield 'release-targets-changed with stray data key' => ['bad-release-targets-changed.json', 'stray_field'];
     }
 
     #[DataProvider('goodFixtures')]
