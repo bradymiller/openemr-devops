@@ -1,10 +1,10 @@
 name: Ship Release
 
-# Manually-triggered orchestration for the three-PR release flow (#705):
-# merges infra → conductor → docs in strict order, skipping any already merged
+# Manually-triggered orchestration for the two-PR release flow (#705):
+# merges conductor → docs in strict order, skipping any already merged
 # (so the same trigger handles partial-merge recovery), and refusing to merge
 # anything if any unmerged PR is not ready. Mints one App token with PR-write
-# on all three repos and posts a release/ship-approved commit status on each
+# on both repos and posts a release/ship-approved commit status on each
 # PR head before merging it (so branch protection can require it later).
 
 on:

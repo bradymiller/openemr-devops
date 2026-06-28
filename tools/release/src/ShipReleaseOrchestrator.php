@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Merges the three release PRs (infra → conductor → docs) in strict order.
+ * Merges the two release PRs (conductor → docs) in strict order.
  *
  * Two-phase: a preflight pass evaluates every unmerged target's readiness and
  * refuses to merge anything if any unmerged PR is not ready (issue #705 step
@@ -40,7 +40,7 @@ final readonly class ShipReleaseOrchestrator
     }
 
     /**
-     * @param list<PullRequestTarget> $targets infra, conductor, docs (any order — sorted internally)
+     * @param list<PullRequestTarget> $targets conductor, docs (any order — sorted internally)
      */
     public function ship(array $targets): ShipReleaseResult
     {
@@ -67,17 +67,47 @@ final readonly class ShipReleaseOrchestrator
     }
 
     /**
-     * Defensive sort + uniqueness check so a caller passing targets in any
-     * order still gets infra → conductor → docs at merge time.
+     * Defensive sort + contract check. The 2-PR ship contract requires
+     * exactly the Conductor and Docs targets in any order; this method
+     * fails fast on a stale caller passing the wrong shape (e.g., an
+     * extra target, a missing one, or duplicate mergeOrder values),
+     * since the alternative is a silent half-failure deep in the
+     * downstream merge logic.
      *
      * @param  list<PullRequestTarget> $targets
      * @return list<PullRequestTarget>
      */
     private function sortByMergeOrder(array $targets): array
     {
+        if (count($targets) !== 2) {
+            throw new \LogicException(
+                'ship-release expects exactly 2 targets (Conductor + Docs); got ' . count($targets),
+            );
+        }
+        $roles = array_map(static fn (PullRequestTarget $t): string => $t->roleLabel->value, $targets);
+        sort($roles);
+        $expected = [RoleLabel::Conductor->value, RoleLabel::Docs->value];
+        sort($expected);
+        if ($roles !== $expected) {
+            throw new \LogicException(
+                'ship-release targets must be {Conductor, Docs}; got {' . implode(', ', $roles) . '}',
+            );
+        }
         $orders = array_map(static fn (PullRequestTarget $t): int => $t->mergeOrder, $targets);
         if (count(array_unique($orders)) !== count($orders)) {
             throw new \LogicException('ship-release targets have duplicate mergeOrder values');
+        }
+        // Enforce Conductor-before-Docs at the mergeOrder level too —
+        // {Conductor, Docs} with Docs.mergeOrder < Conductor.mergeOrder
+        // would pass the role-set + dedup checks above but usort would
+        // then merge Docs first, violating the strict merge sequence.
+        $conductor = $this->findRequired($targets, RoleLabel::Conductor);
+        $docs = $this->findRequired($targets, RoleLabel::Docs);
+        if ($conductor->mergeOrder >= $docs->mergeOrder) {
+            throw new \LogicException(
+                'ship-release mergeOrder must put Conductor before Docs; got Conductor='
+                . $conductor->mergeOrder . ' Docs=' . $docs->mergeOrder,
+            );
         }
         usort(
             $targets,

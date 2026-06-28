@@ -14,8 +14,7 @@ tools/release/
 ├── contracts/   JSON schemas vendored across consumer repos
 ├── scripts/     Operational shell probes (App-token sanity checks etc.)
 ├── templates/   PR body / changelog Twig templates
-├── Taskfile.yml Glue between workflows and the PHP CLIs (`task release:*`)
-└── versions.yml The 3-slot rotation registry (current/next/dev)
+└── Taskfile.yml Glue between workflows and the PHP CLIs (`task release:*`)
 ```
 
 Workflow steps in `.github/workflows/` are deliberately thin: mint App token,

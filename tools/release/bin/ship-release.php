@@ -2,10 +2,10 @@
 <?php
 
 /**
- * Merge the three release PRs (infra → conductor → docs) in order.
+ * Merge the two release PRs (conductor → docs) in order.
  *
  * Authenticates via the ambient GH_TOKEN env var. The workflow mints a release
- * App token with PR-write on all three repos and exports it before invoking.
+ * App token with PR-write on both repos and exports it before invoking.
  *
  * @package   openemr-devops
  * @link      https://www.open-emr.org
@@ -33,7 +33,7 @@ use Symfony\Component\Filesystem\Filesystem;
 
 (new SingleCommandApplication())
     ->setName('ship-release')
-    ->setDescription('Merge the three release PRs in order (issue #705)')
+    ->setDescription('Merge the two release PRs in order (issue #705)')
     // Option is `--release-version`, not `--version`: Symfony Console reserves
     // `--version`/`-V` as a global flag that prints the app name and exits 0
     // before the command runs, so `--version=8.1.0` would silently no-op.
